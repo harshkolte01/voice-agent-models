@@ -17,6 +17,7 @@ from app.keys import (
     save_keys,
     slugify,
 )
+from app.rerank import resolve_rerank_device
 from app.transcribe import public_model_id, resolve_compute_type, resolve_device
 
 
@@ -88,6 +89,14 @@ def test_resolve_device_auto_uses_cuda_when_available() -> None:
     with patch("app.transcribe.cuda_available", return_value=False):
         assert resolve_device("auto") == "cpu"
     assert resolve_device("cpu") == "cpu"
+
+
+def test_resolve_rerank_device_auto_uses_cuda_when_available() -> None:
+    with patch("app.rerank.torch_cuda_available", return_value=True):
+        assert resolve_rerank_device("auto") == "cuda"
+    with patch("app.rerank.torch_cuda_available", return_value=False):
+        assert resolve_rerank_device("auto") == "cpu"
+    assert resolve_rerank_device("cpu") == "cpu"
 
 
 def test_resolve_compute_type_auto() -> None:

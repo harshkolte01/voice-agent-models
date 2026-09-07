@@ -4,5 +4,9 @@ python-multipart>=0.0.12
 pydantic-settings>=2.6.0
 python-dotenv>=1.0.0
 faster-whisper>=1.1.0
+# PyPI torch is CPU-only. After this file, install the CUDA wheel:
+# pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu128
+torch>=2.4.0
+transformers>=4.44.0
 pytest>=8.0.0
 httpx>=0.27.0

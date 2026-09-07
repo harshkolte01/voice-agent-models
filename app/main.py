@@ -11,10 +11,14 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from app.auth import require_api_key
 from app.config import get_settings
 from app.keys import ApiKeyRecord
+from app.rerank import Reranker
 from app.schemas import (
     HealthResponse,
     ModelInfo,
     ModelsResponse,
+    RerankRequest,
+    RerankResponse,
+    RerankResult,
     TranscriptionResponse,
 )
 from app.transcribe import Transcriber, public_model_id
@@ -30,17 +34,26 @@ def _get_transcriber(app: FastAPI) -> Transcriber:
     return transcriber
 
 
+def _get_reranker(app: FastAPI) -> Reranker:
+    reranker = getattr(app.state, "reranker", None)
+    if reranker is None:
+        raise HTTPException(status_code=503, detail="Reranker is not loaded")
+    return reranker
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     app.state.transcriber = Transcriber.from_settings(settings)
+    app.state.reranker = Reranker.from_settings(settings)
     yield
     app.state.transcriber = None
+    app.state.reranker = None
 
 
 app = FastAPI(
     title="STT API",
-    description="Private speech-to-text API. Send audio, receive text.",
+    description="Private speech-to-text and rerank API.",
     lifespan=lifespan,
 )
 
@@ -48,10 +61,12 @@ app = FastAPI(
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     transcriber = getattr(app.state, "transcriber", None)
+    reranker = getattr(app.state, "reranker", None)
     device = transcriber.device if transcriber is not None else "unknown"
     return HealthResponse(
         status="ok",
         model_loaded=bool(transcriber and transcriber.loaded),
+        reranker_loaded=bool(reranker and reranker.loaded),
         device=device,
     )
 
@@ -59,9 +74,11 @@ async def health() -> HealthResponse:
 @app.get("/v1/models", response_model=ModelsResponse)
 async def list_models(_: ApiKeyRecord = Depends(require_api_key)) -> ModelsResponse:
     transcriber = _get_transcriber(app)
+    reranker = _get_reranker(app)
     return ModelsResponse(
         models=[
             ModelInfo(id=public_model_id(transcriber.model_name), type="stt"),
+            ModelInfo(id=reranker.model_name, type="rerank"),
         ]
     )
 
@@ -136,6 +153,34 @@ async def transcribe_audio(
         rtf=rtf,
         device=transcriber.device,
         model=public_model_id(transcriber.model_name),
+    )
+
+
+@app.post("/v1/rerank", response_model=RerankResponse)
+async def rerank_documents(
+    body: RerankRequest,
+    _: ApiKeyRecord = Depends(require_api_key),
+) -> RerankResponse:
+    settings = get_settings()
+    if len(body.documents) > settings.rerank_max_docs:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many documents. Max: {settings.rerank_max_docs}",
+        )
+
+    reranker = _get_reranker(app)
+    started = time.perf_counter()
+    ranked = await reranker.rank(body.query, body.documents, body.top_k)
+    processing_ms = int((time.perf_counter() - started) * 1000)
+
+    return RerankResponse(
+        results=[
+            RerankResult(index=item.index, score=item.score, document=item.document)
+            for item in ranked
+        ],
+        processing_ms=processing_ms,
+        device=reranker.device,
+        model=reranker.model_name,
     )
 
 

@@ -1,9 +1,10 @@
 # Private STT API server
 
-Host-laptop speech-to-text API. The Whisper model stays on this machine. Clients only need:
+Host-laptop speech-to-text and rerank API. Whisper and `BAAI/bge-reranker-v2-m3` stay on this machine. Clients only need:
 
 ```env
 STT_API_URL=http://127.0.0.1:8000/v1/audio/transcriptions
+RERANK_API_URL=http://127.0.0.1:8000/v1/rerank
 STT_API_KEY=stt_live_...
 ```
 
@@ -21,8 +22,11 @@ cd C:\Coding\stt-model
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu128
 copy .env.example .env
 ```
+
+`pip install torch` from PyPI is CPU-only. The second command installs the CUDA 12.8 wheel so the reranker can use the GPU. Whisper uses CTranslate2 and does not depend on that Torch build.
 
 ## Generate an API key
 
@@ -53,14 +57,14 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 The process binds to localhost only. Use a tunnel if you need a public URL.
 
-First start downloads `large-v3-turbo` via faster-whisper (CTranslate2). Later starts reuse the Hugging Face cache.
+First start downloads `large-v3-turbo` via faster-whisper (CTranslate2) and `BAAI/bge-reranker-v2-m3` via Hugging Face. Later starts reuse the local cache. Both models stay loaded in the same process. The reranker uses about 1 GB extra VRAM in fp16.
 
 ## API
 
 ### `GET /health` (no auth)
 
 ```json
-{ "status": "ok", "model_loaded": true, "device": "cuda" }
+{ "status": "ok", "model_loaded": true, "reranker_loaded": true, "device": "cuda" }
 ```
 
 ### `GET /v1/models`
@@ -68,7 +72,12 @@ First start downloads `large-v3-turbo` via faster-whisper (CTranslate2). Later s
 Header: `Authorization: Bearer stt_live_...`
 
 ```json
-{ "models": [{ "id": "whisper-large-v3-turbo", "type": "stt" }] }
+{
+  "models": [
+    { "id": "whisper-large-v3-turbo", "type": "stt" },
+    { "id": "BAAI/bge-reranker-v2-m3", "type": "rerank" }
+  ]
+}
 ```
 
 ### `POST /v1/audio/transcriptions`
@@ -102,6 +111,29 @@ Timing fields:
 
 Total client latency is still measured on their side (`time around requests.post`), because that includes upload + tunnel + download.
 
+### `POST /v1/rerank`
+
+Header: `Authorization: Bearer stt_live_...`
+
+JSON body:
+
+- `query` (required): search or ranking query
+- `documents` (required): 1 to `RERANK_MAX_DOCS` strings
+- `top_k` (optional): return only the top N results
+
+```json
+{
+  "results": [
+    { "index": 1, "score": 0.87, "document": "doc b" }
+  ],
+  "processing_ms": 12,
+  "device": "cuda",
+  "model": "BAAI/bge-reranker-v2-m3"
+}
+```
+
+`index` is the original position in `documents`. Scores are sigmoid-normalized 0–1. Results are sorted high-to-low.
+
 ### curl
 
 ```powershell
@@ -113,6 +145,11 @@ curl.exe -H "Authorization: Bearer $env:STT_API_KEY" `
   -F "file=@test.wav;type=audio/wav" `
   -F "language=en" `
   http://127.0.0.1:8000/v1/audio/transcriptions
+
+curl.exe -H "Authorization: Bearer $env:STT_API_KEY" `
+  -H "Content-Type: application/json" `
+  -d '{ "query": "meeting notes", "documents": ["doc a", "doc b"] }' `
+  http://127.0.0.1:8000/v1/rerank
 ```
 
 ## Config
@@ -128,6 +165,9 @@ Copied from `.env.example`:
 | `STT_MAX_UPLOAD_MB` | `25` | upload size limit |
 | `STT_HOST` | `127.0.0.1` | bind address |
 | `STT_PORT` | `8000` | bind port |
+| `RERANK_MODEL` | `BAAI/bge-reranker-v2-m3` | Hugging Face reranker id |
+| `RERANK_DEVICE` | `auto` | PyTorch `cuda` if a GPU is visible, else `cpu` |
+| `RERANK_MAX_DOCS` | `64` | max documents per rerank request |
 
 ## Cloudflare Tunnel
 
@@ -165,4 +205,4 @@ STT_API_KEY=stt_live_...
 pytest
 ```
 
-API tests mock Whisper so they do not need a GPU or model download.
+API tests mock Whisper and the reranker so they do not need a GPU or model download.

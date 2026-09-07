@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     stt_max_upload_mb: int = 25
     stt_host: str = "127.0.0.1"
     stt_port: int = 8000
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"
+    rerank_device: str = "auto"
+    rerank_max_docs: int = 64
 
 
 @lru_cache
