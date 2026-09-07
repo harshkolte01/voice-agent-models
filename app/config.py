@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
     rerank_device: str = "auto"
     rerank_max_docs: int = 64
+    embed_model: str = "BAAI/bge-m3"
+    embed_device: str = "auto"
+    embed_max_texts: int = 64
+    embed_max_length: int = 8192
 
 
 @lru_cache

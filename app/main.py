@@ -11,8 +11,11 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from app.auth import require_api_key
 from app.config import get_settings
 from app.keys import ApiKeyRecord
+from app.embed import Embedder
 from app.rerank import Reranker
 from app.schemas import (
+    EmbedRequest,
+    EmbedResponse,
     HealthResponse,
     ModelInfo,
     ModelsResponse,
@@ -41,19 +44,28 @@ def _get_reranker(app: FastAPI) -> Reranker:
     return reranker
 
 
+def _get_embedder(app: FastAPI) -> Embedder:
+    embedder = getattr(app.state, "embedder", None)
+    if embedder is None:
+        raise HTTPException(status_code=503, detail="Embedder is not loaded")
+    return embedder
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     app.state.transcriber = Transcriber.from_settings(settings)
     app.state.reranker = Reranker.from_settings(settings)
+    app.state.embedder = Embedder.from_settings(settings)
     yield
     app.state.transcriber = None
     app.state.reranker = None
+    app.state.embedder = None
 
 
 app = FastAPI(
     title="STT API",
-    description="Private speech-to-text and rerank API.",
+    description="Private speech-to-text, rerank, and embedding API.",
     lifespan=lifespan,
 )
 
@@ -62,11 +74,13 @@ app = FastAPI(
 async def health() -> HealthResponse:
     transcriber = getattr(app.state, "transcriber", None)
     reranker = getattr(app.state, "reranker", None)
+    embedder = getattr(app.state, "embedder", None)
     device = transcriber.device if transcriber is not None else "unknown"
     return HealthResponse(
         status="ok",
         model_loaded=bool(transcriber and transcriber.loaded),
         reranker_loaded=bool(reranker and reranker.loaded),
+        embedder_loaded=bool(embedder and embedder.loaded),
         device=device,
     )
 
@@ -75,10 +89,12 @@ async def health() -> HealthResponse:
 async def list_models(_: ApiKeyRecord = Depends(require_api_key)) -> ModelsResponse:
     transcriber = _get_transcriber(app)
     reranker = _get_reranker(app)
+    embedder = _get_embedder(app)
     return ModelsResponse(
         models=[
             ModelInfo(id=public_model_id(transcriber.model_name), type="stt"),
             ModelInfo(id=reranker.model_name, type="rerank"),
+            ModelInfo(id=embedder.model_name, type="embedding"),
         ]
     )
 
@@ -181,6 +197,33 @@ async def rerank_documents(
         processing_ms=processing_ms,
         device=reranker.device,
         model=reranker.model_name,
+    )
+
+
+@app.post("/v1/embeddings", response_model=EmbedResponse)
+async def embed_texts(
+    body: EmbedRequest,
+    _: ApiKeyRecord = Depends(require_api_key),
+) -> EmbedResponse:
+    settings = get_settings()
+    texts = body.input
+    if len(texts) > settings.embed_max_texts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many texts. Max: {settings.embed_max_texts}",
+        )
+
+    embedder = _get_embedder(app)
+    started = time.perf_counter()
+    result = await embedder.encode(texts)
+    processing_ms = int((time.perf_counter() - started) * 1000)
+
+    return EmbedResponse(
+        embeddings=result.embeddings,
+        dim=result.dim,
+        processing_ms=processing_ms,
+        device=embedder.device,
+        model=embedder.model_name,
     )
 
 

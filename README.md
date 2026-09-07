@@ -1,10 +1,11 @@
 # Private STT API server
 
-Host-laptop speech-to-text and rerank API. Whisper and `BAAI/bge-reranker-v2-m3` stay on this machine. Clients only need:
+Host-laptop speech-to-text, rerank, and embedding API. Whisper, `BAAI/bge-reranker-v2-m3`, and `BAAI/bge-m3` stay on this machine. Clients only need:
 
 ```env
 STT_API_URL=http://127.0.0.1:8000/v1/audio/transcriptions
 RERANK_API_URL=http://127.0.0.1:8000/v1/rerank
+EMBED_API_URL=http://127.0.0.1:8000/v1/embeddings
 STT_API_KEY=stt_live_...
 ```
 
@@ -26,7 +27,7 @@ pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu128
 copy .env.example .env
 ```
 
-`pip install torch` from PyPI is CPU-only. The second command installs the CUDA 12.8 wheel so the reranker can use the GPU. Whisper uses CTranslate2 and does not depend on that Torch build.
+`pip install torch` from PyPI is CPU-only. The second command installs the CUDA 12.8 wheel so the reranker and embedder can use the GPU. Whisper uses CTranslate2 and does not depend on that Torch build.
 
 ## Generate an API key
 
@@ -57,14 +58,14 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 The process binds to localhost only. Use a tunnel if you need a public URL.
 
-First start downloads `large-v3-turbo` via faster-whisper (CTranslate2) and `BAAI/bge-reranker-v2-m3` via Hugging Face. Later starts reuse the local cache. Both models stay loaded in the same process. The reranker uses about 1 GB extra VRAM in fp16.
+First start downloads `large-v3-turbo` via faster-whisper (CTranslate2), plus `BAAI/bge-reranker-v2-m3` and `BAAI/bge-m3` via Hugging Face. Later starts reuse the local cache. All three models stay loaded in the same process. The reranker and embedder each use about 1 GB extra VRAM in fp16.
 
 ## API
 
 ### `GET /health` (no auth)
 
 ```json
-{ "status": "ok", "model_loaded": true, "reranker_loaded": true, "device": "cuda" }
+{ "status": "ok", "model_loaded": true, "reranker_loaded": true, "embedder_loaded": true, "device": "cuda" }
 ```
 
 ### `GET /v1/models`
@@ -75,7 +76,8 @@ Header: `Authorization: Bearer stt_live_...`
 {
   "models": [
     { "id": "whisper-large-v3-turbo", "type": "stt" },
-    { "id": "BAAI/bge-reranker-v2-m3", "type": "rerank" }
+    { "id": "BAAI/bge-reranker-v2-m3", "type": "rerank" },
+    { "id": "BAAI/bge-m3", "type": "embedding" }
   ]
 }
 ```
@@ -134,6 +136,26 @@ JSON body:
 
 `index` is the original position in `documents`. Scores are sigmoid-normalized 0–1. Results are sorted high-to-low.
 
+### `POST /v1/embeddings`
+
+Header: `Authorization: Bearer stt_live_...`
+
+JSON body:
+
+- `input` (required): a string or a list of 1 to `EMBED_MAX_TEXTS` strings
+
+```json
+{
+  "embeddings": [[0.01, -0.02]],
+  "dim": 1024,
+  "processing_ms": 18,
+  "device": "cuda",
+  "model": "BAAI/bge-m3"
+}
+```
+
+Vectors are L2-normalized dense embeddings (BGE-M3 CLS pooling). Compare them with cosine similarity.
+
 ### curl
 
 ```powershell
@@ -150,6 +172,11 @@ curl.exe -H "Authorization: Bearer $env:STT_API_KEY" `
   -H "Content-Type: application/json" `
   -d '{ "query": "meeting notes", "documents": ["doc a", "doc b"] }' `
   http://127.0.0.1:8000/v1/rerank
+
+curl.exe -H "Authorization: Bearer $env:STT_API_KEY" `
+  -H "Content-Type: application/json" `
+  -d '{ "input": ["meeting notes", "standup is at 10am"] }' `
+  http://127.0.0.1:8000/v1/embeddings
 ```
 
 ## Config
@@ -168,6 +195,10 @@ Copied from `.env.example`:
 | `RERANK_MODEL` | `BAAI/bge-reranker-v2-m3` | Hugging Face reranker id |
 | `RERANK_DEVICE` | `auto` | PyTorch `cuda` if a GPU is visible, else `cpu` |
 | `RERANK_MAX_DOCS` | `64` | max documents per rerank request |
+| `EMBED_MODEL` | `BAAI/bge-m3` | Hugging Face embedding id |
+| `EMBED_DEVICE` | `auto` | PyTorch `cuda` if a GPU is visible, else `cpu` |
+| `EMBED_MAX_TEXTS` | `64` | max strings per embeddings request |
+| `EMBED_MAX_LENGTH` | `8192` | tokenizer max tokens per string |
 
 ## Cloudflare Tunnel
 
@@ -205,4 +236,4 @@ STT_API_KEY=stt_live_...
 pytest
 ```
 
-API tests mock Whisper and the reranker so they do not need a GPU or model download.
+API tests mock Whisper, the reranker, and the embedder so they do not need a GPU or model download.

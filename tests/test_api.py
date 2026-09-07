@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.keys import create_key, save_keys, load_keys
+from app.embed import EmbeddingResult
 from app.rerank import RankedDocument
 from app.transcribe import TranscriptionResult
 
@@ -24,6 +25,10 @@ def keys_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
     monkeypatch.setenv("RERANK_DEVICE", "cpu")
     monkeypatch.setenv("RERANK_MAX_DOCS", "64")
+    monkeypatch.setenv("EMBED_MODEL", "BAAI/bge-m3")
+    monkeypatch.setenv("EMBED_DEVICE", "cpu")
+    monkeypatch.setenv("EMBED_MAX_TEXTS", "64")
+    monkeypatch.setenv("EMBED_MAX_LENGTH", "8192")
     get_settings.cache_clear()
     yield path
     get_settings.cache_clear()
@@ -74,10 +79,36 @@ def dummy_reranker() -> MagicMock:
 
 
 @pytest.fixture
-def client(keys_file: Path, dummy_transcriber: MagicMock, dummy_reranker: MagicMock):
+def dummy_embedder() -> MagicMock:
+    dummy = MagicMock()
+    dummy.loaded = True
+    dummy.device = "cpu"
+    dummy.model_name = "BAAI/bge-m3"
+
+    async def fake_encode(texts: list[str]):
+        embeddings = []
+        for index, _text in enumerate(texts):
+            vector = [0.0] * 4
+            vector[0] = 1.0 if index == 0 else 0.0
+            vector[1] = 1.0 if index != 0 else 0.0
+            embeddings.append(vector)
+        return EmbeddingResult(embeddings=embeddings, dim=4)
+
+    dummy.encode.side_effect = fake_encode
+    return dummy
+
+
+@pytest.fixture
+def client(
+    keys_file: Path,
+    dummy_transcriber: MagicMock,
+    dummy_reranker: MagicMock,
+    dummy_embedder: MagicMock,
+):
     with (
         patch("app.main.Transcriber.from_settings", return_value=dummy_transcriber),
         patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
+        patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
     ):
         from app.main import app
 
@@ -102,6 +133,7 @@ def test_health_unauthenticated(client: TestClient) -> None:
     assert body["status"] == "ok"
     assert body["model_loaded"] is True
     assert body["reranker_loaded"] is True
+    assert body["embedder_loaded"] is True
     assert body["device"] == "cpu"
 
 
@@ -125,6 +157,7 @@ def test_models_ok(client: TestClient, api_key: str) -> None:
         "models": [
             {"id": "whisper-large-v3-turbo", "type": "stt"},
             {"id": "BAAI/bge-reranker-v2-m3", "type": "rerank"},
+            {"id": "BAAI/bge-m3", "type": "embedding"},
         ]
     }
 
@@ -181,6 +214,7 @@ def test_transcribe_rejects_oversize(
     keys_file: Path,
     dummy_transcriber: MagicMock,
     dummy_reranker: MagicMock,
+    dummy_embedder: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("STT_MAX_UPLOAD_MB", "0")
@@ -190,6 +224,7 @@ def test_transcribe_rejects_oversize(
     with (
         patch("app.main.Transcriber.from_settings", return_value=dummy_transcriber),
         patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
+        patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
     ):
         from app.main import app
 
@@ -278,6 +313,7 @@ def test_rerank_rejects_over_max_docs(
     keys_file: Path,
     dummy_transcriber: MagicMock,
     dummy_reranker: MagicMock,
+    dummy_embedder: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RERANK_MAX_DOCS", "1")
@@ -287,6 +323,7 @@ def test_rerank_rejects_over_max_docs(
     with (
         patch("app.main.Transcriber.from_settings", return_value=dummy_transcriber),
         patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
+        patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
     ):
         from app.main import app
 
@@ -300,3 +337,85 @@ def test_rerank_rejects_over_max_docs(
     assert response.status_code == 400
     assert "Too many documents" in response.json()["detail"]
     dummy_reranker.rank.assert_not_called()
+
+
+def test_embed_requires_api_key(client: TestClient) -> None:
+    response = client.post("/v1/embeddings", json={"input": ["hello"]})
+    assert response.status_code == 401
+
+
+def test_embed_ok(client: TestClient, api_key: str, dummy_embedder: MagicMock) -> None:
+    response = client.post(
+        "/v1/embeddings",
+        headers=auth_header(api_key),
+        json={"input": ["query", "document"]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["device"] == "cpu"
+    assert body["model"] == "BAAI/bge-m3"
+    assert body["dim"] == 4
+    assert len(body["embeddings"]) == 2
+    assert len(body["embeddings"][0]) == 4
+    assert isinstance(body["processing_ms"], int)
+    dummy_embedder.encode.assert_called()
+
+
+def test_embed_accepts_single_string(client: TestClient, api_key: str) -> None:
+    response = client.post(
+        "/v1/embeddings",
+        headers=auth_header(api_key),
+        json={"input": "hello world"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["embeddings"]) == 1
+    assert body["dim"] == 4
+
+
+def test_embed_rejects_empty_input(client: TestClient, api_key: str) -> None:
+    response = client.post(
+        "/v1/embeddings",
+        headers=auth_header(api_key),
+        json={"input": []},
+    )
+    assert response.status_code == 422
+
+
+def test_embed_rejects_blank_text(client: TestClient, api_key: str) -> None:
+    response = client.post(
+        "/v1/embeddings",
+        headers=auth_header(api_key),
+        json={"input": ["hello", "  "]},
+    )
+    assert response.status_code == 422
+
+
+def test_embed_rejects_over_max_texts(
+    keys_file: Path,
+    dummy_transcriber: MagicMock,
+    dummy_reranker: MagicMock,
+    dummy_embedder: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EMBED_MAX_TEXTS", "1")
+    get_settings.cache_clear()
+    plaintext, _ = create_key(keys_file, name="embed-limit")
+
+    with (
+        patch("app.main.Transcriber.from_settings", return_value=dummy_transcriber),
+        patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
+        patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
+    ):
+        from app.main import app
+
+        with TestClient(app) as test_client:
+            response = test_client.post(
+                "/v1/embeddings",
+                headers=auth_header(plaintext),
+                json={"input": ["one", "two"]},
+            )
+
+    assert response.status_code == 400
+    assert "Too many texts" in response.json()["detail"]
+    dummy_embedder.encode.assert_not_called()

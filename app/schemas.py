@@ -5,6 +5,7 @@ class HealthResponse(BaseModel):
     status: str
     model_loaded: bool
     reranker_loaded: bool
+    embedder_loaded: bool
     device: str
 
 
@@ -58,6 +59,29 @@ class RerankResult(BaseModel):
 
 class RerankResponse(BaseModel):
     results: list[RerankResult]
+    processing_ms: int
+    device: str
+    model: str
+
+
+class EmbedRequest(BaseModel):
+    input: str | list[str]
+
+    @field_validator("input")
+    @classmethod
+    def normalize_input(cls, value: str | list[str]) -> list[str]:
+        texts = [value] if isinstance(value, str) else value
+        if not texts:
+            raise ValueError("input must not be empty")
+        for index, text in enumerate(texts):
+            if not text.strip():
+                raise ValueError(f"input[{index}] must not be empty")
+        return texts
+
+
+class EmbedResponse(BaseModel):
+    embeddings: list[list[float]]
+    dim: int
     processing_ms: int
     device: str
     model: str
