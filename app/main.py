@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 
+from app.access_log import AccessLogMiddleware, configure_access_log
 from app.auth import require_api_key
 from app.config import get_settings
 from app.keys import ApiKeyRecord
@@ -53,6 +54,7 @@ def _get_embedder(app: FastAPI) -> Embedder:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_access_log()
     settings = get_settings()
     app.state.transcriber = Transcriber.from_settings(settings)
     app.state.reranker = Reranker.from_settings(settings)
@@ -68,6 +70,7 @@ app = FastAPI(
     description="Private speech-to-text, rerank, and embedding API.",
     lifespan=lifespan,
 )
+app.add_middleware(AccessLogMiddleware)
 
 
 @app.get("/health", response_model=HealthResponse)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -135,6 +136,36 @@ def test_health_unauthenticated(client: TestClient) -> None:
     assert body["reranker_loaded"] is True
     assert body["embedder_loaded"] is True
     assert body["device"] == "cpu"
+
+
+def test_access_log_line_ist_key_and_cf_ip(
+    client: TestClient,
+    api_key: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.INFO, logger="stt.access"):
+        response = client.post(
+            "/v1/embeddings",
+            headers={
+                **auth_header(api_key),
+                "cf-connecting-ip": "49.36.11.20",
+                "cf-ipcountry": "IN",
+            },
+            json={"input": ["hello"]},
+        )
+    assert response.status_code == 200
+    matching = [
+        record.message
+        for record in caplog.records
+        if "POST /v1/embeddings" in record.message
+    ]
+    assert matching
+    line = matching[-1]
+    assert " IST  " in line
+    assert "key=test" in line
+    assert "ip=49.36.11.20" in line
+    assert " IN  POST /v1/embeddings  200  " in line
+    assert line.endswith("ms")
 
 
 def test_models_requires_api_key(client: TestClient) -> None:

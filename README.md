@@ -58,6 +58,12 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 The process binds to localhost only. Use a tunnel if you need a public URL.
 
+Each request is logged in IST with key id, client IP (Cloudflare `CF-Connecting-IP` when tunneled), country, method, path, status, and duration:
+
+```text
+2026-09-08 16:41:12 IST  key=dev-a  ip=49.36.11.20  IN  POST /v1/embeddings  200  54ms
+```
+
 First start downloads `large-v3-turbo` via faster-whisper (CTranslate2), plus `BAAI/bge-reranker-v2-m3` and `BAAI/bge-m3` via Hugging Face. Later starts reuse the local cache. All three models stay loaded in the same process. The reranker and embedder each use about 1 GB extra VRAM in fp16.
 
 ## API
