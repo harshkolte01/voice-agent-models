@@ -150,3 +150,26 @@ def test_build_tts_prompt() -> None:
     )
     raw = '<description="sad, Tamil accent, slow pace"> already tagged'
     assert build_tts_prompt(raw, tone="happy") == raw
+
+
+def test_resolve_rumik_engine_class() -> None:
+    from types import SimpleNamespace
+
+    from app.tts import resolve_rumik_engine_class
+
+    class RumikOSS:
+        pass
+
+    class TinyAya:
+        pass
+
+    assert resolve_rumik_engine_class(SimpleNamespace(RumikOSS=RumikOSS, TinyAya=TinyAya)) is RumikOSS
+    assert resolve_rumik_engine_class(SimpleNamespace(TinyAya=TinyAya)) is TinyAya
+    with pytest.raises(RuntimeError, match="RumikOSS or TinyAya"):
+        resolve_rumik_engine_class(SimpleNamespace())
+
+
+def test_resolve_hf_token_prefers_explicit() -> None:
+    from app.sravaani import resolve_hf_token
+
+    assert resolve_hf_token("  hf_abc  ") == "hf_abc"

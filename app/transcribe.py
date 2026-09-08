@@ -120,6 +120,8 @@ class Transcriber:
         settings: Settings,
         gpu_slot: ExclusiveCudaSlot | None = None,
     ) -> Transcriber:
+        from app.sravaani import resolve_hf_token
+
         return cls(
             model_name=settings.stt_model,
             device=settings.stt_device,
@@ -127,7 +129,7 @@ class Transcriber:
             sravaani_enabled=settings.sravaani_enabled,
             sravaani_model=settings.sravaani_model,
             sravaani_device=settings.sravaani_device,
-            hf_token=settings.hf_token,
+            hf_token=resolve_hf_token(settings.hf_token),
             gpu_slot=gpu_slot,
         )
 

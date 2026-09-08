@@ -8,6 +8,7 @@ faster-whisper>=1.1.0
 # pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 torch>=2.4.0
 transformers>=4.57.0,<5
+sentencepiece>=0.2.0
 huggingface_hub>=0.26.0,<1
 accelerate>=1.0.0
 pytest>=8.0.0

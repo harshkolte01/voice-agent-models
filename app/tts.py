@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import inspect
 import re
 import threading
 from dataclasses import dataclass
@@ -130,6 +131,16 @@ def _load_rumik_module(repo_id: str):
     return module, root
 
 
+def resolve_rumik_engine_class(module):
+    for name in ("RumikOSS", "TinyAya"):
+        engine_cls = getattr(module, name, None)
+        if engine_cls is not None:
+            return engine_cls
+    raise RuntimeError(
+        "rumik-oss server.py has no RumikOSS or TinyAya class"
+    )
+
+
 class TtsEngine:
     def __init__(
         self,
@@ -185,7 +196,10 @@ class TtsEngine:
         if self._engine is None:
             module, root = _load_rumik_module(self.model_name)
             self._module = module
-            self._engine = module.TinyAya(str(root), self.device)
+            self._engine = resolve_rumik_engine_class(module)(
+                str(root),
+                self.device,
+            )
             self.loaded = True
             self._on_cuda = self.device == "cuda"
             return
@@ -245,6 +259,8 @@ class TtsEngine:
                 max_new_tokens=int(max_new_tokens),
             )
             wav_bytes = self._engine.synthesize(request)
+            if inspect.isawaitable(wav_bytes):
+                raise RuntimeError("rumik-oss synthesize must be synchronous")
         return SpeechResult(
             wav_bytes=wav_bytes,
             speaker=chosen_speaker,

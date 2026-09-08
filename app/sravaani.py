@@ -6,10 +6,18 @@ from pathlib import Path
 from app.config import Settings
 from app.gpu_slot import ExclusiveCudaSlot
 from app.rerank import resolve_rerank_device
-from app.transcribe import TranscriptionResult
+from app.transcribe import SRAVAANI_PUBLIC_ID, TranscriptionResult
 
 
-SRAVAANI_PUBLIC_ID = "sravaani-1.0"
+def resolve_hf_token(explicit: str | None) -> str | None:
+    if explicit and explicit.strip():
+        return explicit.strip()
+    try:
+        from huggingface_hub import get_token
+
+        return get_token()
+    except Exception:
+        return None
 
 
 def audio_duration_seconds(audio_path: str) -> float:
@@ -70,7 +78,7 @@ class SraVaaniEngine:
         return cls(
             model_name=settings.sravaani_model,
             device=settings.sravaani_device,
-            token=settings.hf_token,
+            token=resolve_hf_token(settings.hf_token),
             gpu_slot=gpu_slot,
         )
 

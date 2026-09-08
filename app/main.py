@@ -206,7 +206,8 @@ async def transcribe_audio(
                     status_code=503,
                     detail=(
                         "SraVaani failed to load. Accept the license at "
-                        "https://huggingface.co/ARTPARK-IISc/SraVaani-1.0 and set HF_TOKEN."
+                        "https://huggingface.co/ARTPARK-IISc/SraVaani-1.0 and set HF_TOKEN. "
+                        f"Underlying error: {message[:300]}"
                     ),
                 ) from exc
             raise
@@ -317,8 +318,11 @@ async def synthesize_speech(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except (RuntimeError, AttributeError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"TTS failed to load. {exc}",
+        ) from exc
     processing_ms = int((time.perf_counter() - started) * 1000)
 
     return Response(
