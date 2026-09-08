@@ -24,11 +24,11 @@ cd C:\Coding\stt-model
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu128
+pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 copy .env.example .env
 ```
 
-`pip install torch` from PyPI is CPU-only. The second command installs the CUDA 12.8 wheel so the reranker and embedder can use the GPU. Whisper uses CTranslate2 and does not depend on that Torch build.
+`pip install torch` from PyPI is CPU-only. The second command installs matching CUDA 12.8 wheels (`torch`, `torchvision`, `torchaudio`) so rerank, embeddings, SraVaani, and rumik-oss can use the GPU. Those three packages must come from the same index; a mismatched `torchvision` crashes Transformers with `operator torchvision::nms does not exist`. Whisper uses CTranslate2 and does not depend on that Torch build.
 
 ## Generate an API key
 

@@ -25,11 +25,14 @@ def resolve_embed_device(device: str) -> str:
 
 def _load_embed_model(model_name: str, device: str):
     import torch
+    from app.hf_compat import disable_broken_torchvision
+
+    disable_broken_torchvision()
     from transformers import AutoModel, AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     dtype = torch.float16 if device == "cuda" else torch.float32
-    model = AutoModel.from_pretrained(model_name, torch_dtype=dtype)
+    model = AutoModel.from_pretrained(model_name, dtype=dtype)
     model.to(device)
     model.eval()
     return tokenizer, model

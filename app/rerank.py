@@ -34,13 +34,16 @@ def resolve_rerank_device(device: str) -> str:
 
 def _load_rerank_model(model_name: str, device: str):
     import torch
+    from app.hf_compat import disable_broken_torchvision
+
+    disable_broken_torchvision()
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     dtype = torch.float16 if device == "cuda" else torch.float32
     model = AutoModelForSequenceClassification.from_pretrained(
         model_name,
-        torch_dtype=dtype,
+        dtype=dtype,
     )
     model.to(device)
     model.eval()

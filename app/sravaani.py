@@ -76,6 +76,9 @@ class SraVaaniEngine:
 
     def _load(self) -> None:
         import torch
+        from app.hf_compat import disable_broken_torchvision
+
+        disable_broken_torchvision()
         from transformers import AutoModel
 
         kwargs: dict = {"trust_remote_code": True}

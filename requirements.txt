@@ -4,8 +4,8 @@ python-multipart>=0.0.12
 pydantic-settings>=2.6.0
 python-dotenv>=1.0.0
 faster-whisper>=1.1.0
-# PyPI torch is CPU-only. After this file, install the CUDA wheel:
-# pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu128
+# PyPI torch is CPU-only. After this file, install matching CUDA wheels:
+# pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 torch>=2.4.0
 transformers>=4.57.0,<5
 huggingface_hub>=0.26.0,<1

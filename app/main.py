@@ -75,6 +75,9 @@ def _stt_ids(transcriber: Transcriber) -> list[str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_access_log()
+    from app.hf_compat import disable_broken_torchvision
+
+    disable_broken_torchvision()
     settings = get_settings()
     gpu_slot = ExclusiveCudaSlot()
     app.state.gpu_slot = gpu_slot
