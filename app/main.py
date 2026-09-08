@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 
 from app.access_log import AccessLogMiddleware, configure_access_log
 from app.auth import require_api_key
@@ -23,9 +24,12 @@ from app.schemas import (
     RerankRequest,
     RerankResponse,
     RerankResult,
+    SpeechRequest,
     TranscriptionResponse,
 )
 from app.transcribe import Transcriber, public_model_id
+from app.tts import TtsEngine
+from app.gpu_slot import ExclusiveCudaSlot
 
 ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".ogg", ".flac", ".webm"}
 READ_CHUNK_BYTES = 1024 * 1024
@@ -52,22 +56,50 @@ def _get_embedder(app: FastAPI) -> Embedder:
     return embedder
 
 
+def _get_tts(app: FastAPI) -> TtsEngine:
+    tts = getattr(app.state, "tts", None)
+    if tts is None:
+        raise HTTPException(status_code=503, detail="TTS is not enabled")
+    return tts
+
+
+def _stt_ids(transcriber: Transcriber) -> list[str]:
+    listed = getattr(transcriber, "listed_stt_models", None)
+    if callable(listed):
+        ids = listed()
+        if isinstance(ids, list):
+            return ids
+    return [public_model_id(getattr(transcriber, "model_name", "large-v3-turbo"))]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_access_log()
     settings = get_settings()
-    app.state.transcriber = Transcriber.from_settings(settings)
+    gpu_slot = ExclusiveCudaSlot()
+    app.state.gpu_slot = gpu_slot
+    app.state.transcriber = Transcriber.from_settings(settings, gpu_slot=gpu_slot)
     app.state.reranker = Reranker.from_settings(settings)
     app.state.embedder = Embedder.from_settings(settings)
+    app.state.tts = (
+        TtsEngine.from_settings(settings, gpu_slot=gpu_slot)
+        if settings.tts_enabled
+        else None
+    )
+    if settings.sravaani_enabled and settings.sravaani_load_on_startup:
+        app.state.transcriber.ensure_sravaani()
+    if app.state.tts is not None and settings.tts_load_on_startup:
+        app.state.tts.ensure_loaded()
     yield
     app.state.transcriber = None
     app.state.reranker = None
     app.state.embedder = None
+    app.state.tts = None
 
 
 app = FastAPI(
     title="STT API",
-    description="Private speech-to-text, rerank, and embedding API.",
+    description="Private speech-to-text, TTS, rerank, and embedding API.",
     lifespan=lifespan,
 )
 app.add_middleware(AccessLogMiddleware)
@@ -78,12 +110,15 @@ async def health() -> HealthResponse:
     transcriber = getattr(app.state, "transcriber", None)
     reranker = getattr(app.state, "reranker", None)
     embedder = getattr(app.state, "embedder", None)
+    tts = getattr(app.state, "tts", None)
     device = transcriber.device if transcriber is not None else "unknown"
     return HealthResponse(
         status="ok",
         model_loaded=bool(transcriber and transcriber.loaded),
         reranker_loaded=bool(reranker and reranker.loaded),
         embedder_loaded=bool(embedder and embedder.loaded),
+        sravaani_loaded=bool(transcriber and transcriber.sravaani_loaded),
+        tts_loaded=bool(tts and tts.loaded),
         device=device,
     )
 
@@ -93,13 +128,16 @@ async def list_models(_: ApiKeyRecord = Depends(require_api_key)) -> ModelsRespo
     transcriber = _get_transcriber(app)
     reranker = _get_reranker(app)
     embedder = _get_embedder(app)
-    return ModelsResponse(
-        models=[
-            ModelInfo(id=public_model_id(transcriber.model_name), type="stt"),
-            ModelInfo(id=reranker.model_name, type="rerank"),
-            ModelInfo(id=embedder.model_name, type="embedding"),
-        ]
-    )
+    tts = getattr(app.state, "tts", None)
+    models = [
+        ModelInfo(id=model_id, type="stt")
+        for model_id in _stt_ids(transcriber)
+    ]
+    models.append(ModelInfo(id=reranker.model_name, type="rerank"))
+    models.append(ModelInfo(id=embedder.model_name, type="embedding"))
+    if tts is not None:
+        models.append(ModelInfo(id=tts.public_id, type="tts"))
+    return ModelsResponse(models=models)
 
 
 def _suffix_for_upload(filename: str | None) -> str:
@@ -119,6 +157,7 @@ def _suffix_for_upload(filename: str | None) -> str:
 async def transcribe_audio(
     file: UploadFile = File(...),
     language: str | None = Form(default=None),
+    model: str | None = Form(default=None),
     _: ApiKeyRecord = Depends(require_api_key),
 ) -> TranscriptionResponse:
     settings = get_settings()
@@ -149,7 +188,25 @@ async def transcribe_audio(
             raise HTTPException(status_code=400, detail="Empty audio file")
 
         started = time.perf_counter()
-        result = await transcriber.transcribe(audio_path, requested_language)
+        try:
+            result = await transcriber.transcribe(
+                audio_path,
+                requested_language,
+                model=model,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            message = str(exc)
+            if "401" in message or "gated" in message.lower() or "restricted" in message.lower():
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "SraVaani failed to load. Accept the license at "
+                        "https://huggingface.co/ARTPARK-IISc/SraVaani-1.0 and set HF_TOKEN."
+                    ),
+                ) from exc
+            raise
         processing_ms = int((time.perf_counter() - started) * 1000)
     finally:
         if fd >= 0:
@@ -171,7 +228,7 @@ async def transcribe_audio(
         processing_ms=processing_ms,
         rtf=rtf,
         device=transcriber.device,
-        model=public_model_id(transcriber.model_name),
+        model=result.model or public_model_id(transcriber.model_name),
     )
 
 
@@ -227,6 +284,49 @@ async def embed_texts(
         processing_ms=processing_ms,
         device=embedder.device,
         model=embedder.model_name,
+    )
+
+
+@app.post("/v1/audio/speech")
+async def synthesize_speech(
+    body: SpeechRequest,
+    _: ApiKeyRecord = Depends(require_api_key),
+) -> Response:
+    settings = get_settings()
+    if len(body.input) > settings.tts_max_chars:
+        raise HTTPException(
+            status_code=400,
+            detail=f"input must be at most {settings.tts_max_chars} characters",
+        )
+
+    tts = _get_tts(app)
+    started = time.perf_counter()
+    try:
+        result = await tts.synthesize(
+            text=body.input,
+            speaker=body.speaker,
+            tone=body.tone,
+            accent=body.accent,
+            pace=body.pace,
+            temperature=body.temperature,
+            top_k=body.top_k,
+            max_new_tokens=body.max_new_tokens,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    processing_ms = int((time.perf_counter() - started) * 1000)
+
+    return Response(
+        content=result.wav_bytes,
+        media_type="audio/wav",
+        headers={
+            "X-Processing-Ms": str(processing_ms),
+            "X-Model": tts.public_id,
+            "X-Device": tts.device,
+            "X-Speaker": result.speaker,
+        },
     )
 
 

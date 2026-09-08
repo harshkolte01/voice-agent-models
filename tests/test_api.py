@@ -12,6 +12,7 @@ from app.keys import create_key, save_keys, load_keys
 from app.embed import EmbeddingResult
 from app.rerank import RankedDocument
 from app.transcribe import TranscriptionResult
+from app.tts import SpeechResult
 
 
 @pytest.fixture
@@ -41,13 +42,26 @@ def dummy_transcriber() -> MagicMock:
     dummy.loaded = True
     dummy.device = "cpu"
     dummy.model_name = "large-v3-turbo"
+    dummy.sravaani_loaded = False
+    dummy.listed_stt_models.return_value = [
+        "whisper-large-v3-turbo",
+        "sravaani-1.0",
+    ]
 
-    async def fake_transcribe(audio_path: str, language: str | None = None):
+    async def fake_transcribe(
+        audio_path: str,
+        language: str | None = None,
+        model: str | None = None,
+    ):
+        from app.transcribe import normalize_stt_model
+
+        used = normalize_stt_model(model, "whisper-large-v3-turbo")
         return TranscriptionResult(
             text="hello world",
             language=language or "en",
             duration=2.74,
             language_probability=0.98,
+            model=used,
         )
 
     dummy.transcribe.side_effect = fake_transcribe
@@ -100,16 +114,47 @@ def dummy_embedder() -> MagicMock:
 
 
 @pytest.fixture
+def dummy_tts() -> MagicMock:
+    dummy = MagicMock()
+    dummy.loaded = False
+    dummy.enabled = True
+    dummy.device = "cpu"
+    dummy.model_name = "rumik-ai/rumik-oss-1"
+    dummy.public_id = "rumik-oss-1"
+
+    async def fake_synthesize(
+        text: str,
+        speaker: str | None = None,
+        tone: str | None = None,
+        accent: str | None = None,
+        pace: str | None = None,
+        temperature: float = 0.8,
+        top_k: int = 30,
+        max_new_tokens: int = 2048,
+    ):
+        from app.tts import build_tts_prompt, normalize_speaker
+
+        chosen = normalize_speaker(speaker or "Ira")
+        prompt = build_tts_prompt(text, tone=tone, accent=accent, pace=pace)
+        return SpeechResult(wav_bytes=b"RIFFWAV", speaker=chosen, prompt=prompt)
+
+    dummy.synthesize.side_effect = fake_synthesize
+    return dummy
+
+
+@pytest.fixture
 def client(
     keys_file: Path,
     dummy_transcriber: MagicMock,
     dummy_reranker: MagicMock,
     dummy_embedder: MagicMock,
+    dummy_tts: MagicMock,
 ):
     with (
         patch("app.main.Transcriber.from_settings", return_value=dummy_transcriber),
         patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
         patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
+        patch("app.main.TtsEngine.from_settings", return_value=dummy_tts),
     ):
         from app.main import app
 
@@ -135,6 +180,8 @@ def test_health_unauthenticated(client: TestClient) -> None:
     assert body["model_loaded"] is True
     assert body["reranker_loaded"] is True
     assert body["embedder_loaded"] is True
+    assert body["sravaani_loaded"] is False
+    assert body["tts_loaded"] is False
     assert body["device"] == "cpu"
 
 
@@ -187,8 +234,10 @@ def test_models_ok(client: TestClient, api_key: str) -> None:
     assert response.json() == {
         "models": [
             {"id": "whisper-large-v3-turbo", "type": "stt"},
+            {"id": "sravaani-1.0", "type": "stt"},
             {"id": "BAAI/bge-reranker-v2-m3", "type": "rerank"},
             {"id": "BAAI/bge-m3", "type": "embedding"},
+            {"id": "rumik-oss-1", "type": "tts"},
         ]
     }
 
@@ -246,6 +295,7 @@ def test_transcribe_rejects_oversize(
     dummy_transcriber: MagicMock,
     dummy_reranker: MagicMock,
     dummy_embedder: MagicMock,
+    dummy_tts: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("STT_MAX_UPLOAD_MB", "0")
@@ -256,6 +306,7 @@ def test_transcribe_rejects_oversize(
         patch("app.main.Transcriber.from_settings", return_value=dummy_transcriber),
         patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
         patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
+        patch("app.main.TtsEngine.from_settings", return_value=dummy_tts),
     ):
         from app.main import app
 
@@ -345,6 +396,7 @@ def test_rerank_rejects_over_max_docs(
     dummy_transcriber: MagicMock,
     dummy_reranker: MagicMock,
     dummy_embedder: MagicMock,
+    dummy_tts: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RERANK_MAX_DOCS", "1")
@@ -355,6 +407,7 @@ def test_rerank_rejects_over_max_docs(
         patch("app.main.Transcriber.from_settings", return_value=dummy_transcriber),
         patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
         patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
+        patch("app.main.TtsEngine.from_settings", return_value=dummy_tts),
     ):
         from app.main import app
 
@@ -427,6 +480,7 @@ def test_embed_rejects_over_max_texts(
     dummy_transcriber: MagicMock,
     dummy_reranker: MagicMock,
     dummy_embedder: MagicMock,
+    dummy_tts: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("EMBED_MAX_TEXTS", "1")
@@ -437,6 +491,7 @@ def test_embed_rejects_over_max_texts(
         patch("app.main.Transcriber.from_settings", return_value=dummy_transcriber),
         patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
         patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
+        patch("app.main.TtsEngine.from_settings", return_value=dummy_tts),
     ):
         from app.main import app
 
@@ -450,3 +505,81 @@ def test_embed_rejects_over_max_texts(
     assert response.status_code == 400
     assert "Too many texts" in response.json()["detail"]
     dummy_embedder.encode.assert_not_called()
+
+
+def test_transcribe_sravaani_model(
+    client: TestClient,
+    api_key: str,
+    dummy_transcriber: MagicMock,
+) -> None:
+    response = client.post(
+        "/v1/audio/transcriptions",
+        headers=auth_header(api_key),
+        files={"file": ("test.wav", b"fake-audio", "audio/wav")},
+        data={"language": "hi", "model": "sravaani-1.0"},
+    )
+    assert response.status_code == 200
+    assert response.json()["model"] == "sravaani-1.0"
+    kwargs = dummy_transcriber.transcribe.call_args.kwargs
+    assert kwargs["model"] == "sravaani-1.0"
+
+
+def test_transcribe_unknown_model(client: TestClient, api_key: str) -> None:
+    response = client.post(
+        "/v1/audio/transcriptions",
+        headers=auth_header(api_key),
+        files={"file": ("test.wav", b"fake-audio", "audio/wav")},
+        data={"model": "nope"},
+    )
+    assert response.status_code == 400
+    assert "Unknown STT model" in response.json()["detail"]
+
+
+def test_speech_requires_api_key(client: TestClient) -> None:
+    response = client.post(
+        "/v1/audio/speech",
+        json={"input": "hello"},
+    )
+    assert response.status_code == 401
+
+
+def test_speech_ok(client: TestClient, api_key: str, dummy_tts: MagicMock) -> None:
+    response = client.post(
+        "/v1/audio/speech",
+        headers=auth_header(api_key),
+        json={
+            "input": "Namaste",
+            "speaker": "Ira",
+            "tone": "happy",
+            "accent": "Hindi",
+            "pace": "steady",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("audio/wav")
+    assert response.content == b"RIFFWAV"
+    assert response.headers["x-model"] == "rumik-oss-1"
+    assert response.headers["x-speaker"] == "Ira"
+    dummy_tts.synthesize.assert_called()
+
+
+def test_speech_voice_alias(client: TestClient, api_key: str, dummy_tts: MagicMock) -> None:
+    response = client.post(
+        "/v1/audio/speech",
+        headers=auth_header(api_key),
+        json={"text": "hello", "voice": "Zoya"},
+    )
+    assert response.status_code == 200
+    kwargs = dummy_tts.synthesize.call_args.kwargs
+    assert kwargs["speaker"] == "Zoya"
+    assert kwargs["text"] == "hello"
+
+
+def test_speech_rejects_bad_speaker(client: TestClient, api_key: str) -> None:
+    response = client.post(
+        "/v1/audio/speech",
+        headers=auth_header(api_key),
+        json={"input": "hello", "speaker": "NotAVoice"},
+    )
+    assert response.status_code == 400
+    assert "speaker must be one of" in response.json()["detail"]

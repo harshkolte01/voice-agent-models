@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     embed_device: str = "auto"
     embed_max_texts: int = 64
     embed_max_length: int = 8192
+    sravaani_enabled: bool = True
+    sravaani_model: str = "ARTPARK-IISc/SraVaani-1.0"
+    sravaani_device: str = "auto"
+    sravaani_load_on_startup: bool = False
+    tts_enabled: bool = True
+    tts_model: str = "rumik-ai/rumik-oss-1"
+    tts_device: str = "auto"
+    tts_load_on_startup: bool = False
+    tts_max_chars: int = 2000
+    tts_default_speaker: str = "Ira"
+    hf_token: str | None = None
 
 
 @lru_cache

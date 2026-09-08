@@ -117,3 +117,36 @@ def test_resolve_compute_type_auto() -> None:
 def test_public_model_id() -> None:
     assert public_model_id("large-v3-turbo") == "whisper-large-v3-turbo"
     assert public_model_id("whisper-large-v3-turbo") == "whisper-large-v3-turbo"
+
+
+def test_normalize_stt_model() -> None:
+    from app.transcribe import SRAVAANI_PUBLIC_ID, normalize_stt_model
+
+    whisper = "whisper-large-v3-turbo"
+    assert normalize_stt_model(None, whisper) == whisper
+    assert normalize_stt_model("whisper", whisper) == whisper
+    assert normalize_stt_model("sravaani", whisper) == SRAVAANI_PUBLIC_ID
+    assert normalize_stt_model("ARTPARK-IISc/SraVaani-1.0", whisper) == SRAVAANI_PUBLIC_ID
+    with pytest.raises(ValueError, match="Unknown STT model"):
+        normalize_stt_model("omni-7b", whisper)
+
+
+def test_speech_request_aliases() -> None:
+    from app.schemas import SpeechRequest
+
+    body = SpeechRequest.model_validate({"text": "hello", "voice": "Zoya"})
+    assert body.input == "hello"
+    assert body.speaker == "Zoya"
+
+
+def test_build_tts_prompt() -> None:
+    from app.tts import build_tts_prompt, normalize_speaker
+
+    assert normalize_speaker("ira") == "Ira"
+    assert build_tts_prompt("hello") == "hello"
+    assert (
+        build_tts_prompt("hello", tone="happy", accent="Hindi", pace="steady")
+        == '<description="happy, Hindi accent, steady pace"> hello'
+    )
+    raw = '<description="sad, Tamil accent, slow pace"> already tagged'
+    assert build_tts_prompt(raw, tone="happy") == raw

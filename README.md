@@ -1,9 +1,10 @@
 # Private STT API server
 
-Host-laptop speech-to-text, rerank, and embedding API. Whisper, `BAAI/bge-reranker-v2-m3`, and `BAAI/bge-m3` stay on this machine. Clients only need:
+Host-laptop speech-to-text, TTS, rerank, and embedding API. Whisper, SraVaani, rumik-oss, `BAAI/bge-reranker-v2-m3`, and `BAAI/bge-m3` stay on this machine. Clients only need:
 
 ```env
 STT_API_URL=http://127.0.0.1:8000/v1/audio/transcriptions
+TTS_API_URL=http://127.0.0.1:8000/v1/audio/speech
 RERANK_API_URL=http://127.0.0.1:8000/v1/rerank
 EMBED_API_URL=http://127.0.0.1:8000/v1/embeddings
 STT_API_KEY=stt_live_...
@@ -64,14 +65,16 @@ Each request is logged in IST with key id, client IP (Cloudflare `CF-Connecting-
 2026-09-08 16:41:12 IST  key=dev-a  ip=49.36.11.20  IN  POST /v1/embeddings  200  54ms
 ```
 
-First start downloads `large-v3-turbo` via faster-whisper (CTranslate2), plus `BAAI/bge-reranker-v2-m3` and `BAAI/bge-m3` via Hugging Face. Later starts reuse the local cache. All three models stay loaded in the same process. The reranker and embedder each use about 1 GB extra VRAM in fp16.
+First start downloads `large-v3-turbo` via faster-whisper (CTranslate2), plus `BAAI/bge-reranker-v2-m3` and `BAAI/bge-m3` via Hugging Face. SraVaani and rumik-oss stay **lazy**: they download and occupy the GPU only on first use, and they swap with each other so both are not in VRAM at once.
+
+SraVaani is gated. Accept the license at [ARTPARK-IISc/SraVaani-1.0](https://huggingface.co/ARTPARK-IISc/SraVaani-1.0) and set `HF_TOKEN` in `.env`. rumik-oss 1 is CC-BY-NC (research / non-commercial); see [the model card](https://huggingface.co/rumik-ai/rumik-oss-1).
 
 ## API
 
 ### `GET /health` (no auth)
 
 ```json
-{ "status": "ok", "model_loaded": true, "reranker_loaded": true, "embedder_loaded": true, "device": "cuda" }
+{ "status": "ok", "model_loaded": true, "reranker_loaded": true, "embedder_loaded": true, "sravaani_loaded": false, "tts_loaded": false, "device": "cuda" }
 ```
 
 ### `GET /v1/models`
@@ -82,8 +85,10 @@ Header: `Authorization: Bearer stt_live_...`
 {
   "models": [
     { "id": "whisper-large-v3-turbo", "type": "stt" },
+    { "id": "sravaani-1.0", "type": "stt" },
     { "id": "BAAI/bge-reranker-v2-m3", "type": "rerank" },
-    { "id": "BAAI/bge-m3", "type": "embedding" }
+    { "id": "BAAI/bge-m3", "type": "embedding" },
+    { "id": "rumik-oss-1", "type": "tts" }
   ]
 }
 ```
@@ -95,7 +100,8 @@ Header: `Authorization: Bearer stt_live_...`
 `multipart/form-data`:
 
 - `file` (required): wav, mp3, m4a, ogg, flac, or webm (max 25 MB)
-- `language` (optional): e.g. `en`
+- `language` (optional): e.g. `en` or `hi`
+- `model` (optional): `whisper-large-v3-turbo` (default) or `sravaani-1.0`
 
 ```json
 {
@@ -162,6 +168,30 @@ JSON body:
 
 Vectors are L2-normalized dense embeddings (BGE-M3 CLS pooling). Compare them with cosine similarity.
 
+### `POST /v1/audio/speech`
+
+Header: `Authorization: Bearer stt_live_...`
+
+JSON body (returns `audio/wav`, 24 kHz mono):
+
+- `input` (required): text to speak (alias: `text`, max 2000 chars)
+- `speaker` (optional): `Ira`, `Aisha`, `Siya`, or `Zoya` (alias: `voice`)
+- `tone` (optional): `happy`, `sad`, `angry`, `excited`, `professional`
+- `accent` (optional): `Hindi`, `Telugu`, `Tamil`, `Kannada`, `Bengali`, `Punjabi`, `Indian English`
+- `pace` (optional): `slow`, `fast`, `steady`
+
+You can also put a raw rumik description in `input`:
+
+```text
+<description="happy, Hindi accent, steady pace"> नमस्ते, आज आपका दिन कैसा रहा?
+```
+
+Inline vocalizations supported by the model: `<laugh>`, `<chuckle>`, `<sigh>`.
+
+Response headers: `X-Processing-Ms`, `X-Model`, `X-Device`, `X-Speaker`.
+
+rumik-oss is about 3B parameters. On a 12 GB GPU it is swapped with SraVaani so they do not sit in VRAM together. Do not set both `SRAVAANI_LOAD_ON_STARTUP` and `TTS_LOAD_ON_STARTUP`.
+
 ### curl
 
 ```powershell
@@ -173,6 +203,18 @@ curl.exe -H "Authorization: Bearer $env:STT_API_KEY" `
   -F "file=@test.wav;type=audio/wav" `
   -F "language=en" `
   http://127.0.0.1:8000/v1/audio/transcriptions
+
+curl.exe -H "Authorization: Bearer $env:STT_API_KEY" `
+  -F "file=@hindi.mp3;type=audio/mpeg" `
+  -F "model=sravaani-1.0" `
+  -F "language=hi" `
+  http://127.0.0.1:8000/v1/audio/transcriptions
+
+curl.exe -H "Authorization: Bearer $env:STT_API_KEY" `
+  -H "Content-Type: application/json" `
+  -d '{ "input": "Namaste", "speaker": "Ira", "tone": "happy", "accent": "Hindi", "pace": "steady" }' `
+  http://127.0.0.1:8000/v1/audio/speech `
+  --output speech.wav
 
 curl.exe -H "Authorization: Bearer $env:STT_API_KEY" `
   -H "Content-Type: application/json" `
@@ -205,6 +247,17 @@ Copied from `.env.example`:
 | `EMBED_DEVICE` | `auto` | PyTorch `cuda` if a GPU is visible, else `cpu` |
 | `EMBED_MAX_TEXTS` | `64` | max strings per embeddings request |
 | `EMBED_MAX_LENGTH` | `8192` | tokenizer max tokens per string |
+| `SRAVAANI_ENABLED` | `true` | expose `sravaani-1.0` on transcriptions |
+| `SRAVAANI_MODEL` | `ARTPARK-IISc/SraVaani-1.0` | Hugging Face id (gated; needs `HF_TOKEN`) |
+| `SRAVAANI_DEVICE` | `auto` | PyTorch device for SraVaani |
+| `SRAVAANI_LOAD_ON_STARTUP` | `false` | load SraVaani at boot instead of first request |
+| `TTS_ENABLED` | `true` | expose rumik-oss on `/v1/audio/speech` |
+| `TTS_MODEL` | `rumik-ai/rumik-oss-1` | Hugging Face id |
+| `TTS_DEVICE` | `auto` | PyTorch device for rumik-oss |
+| `TTS_LOAD_ON_STARTUP` | `false` | load rumik-oss at boot instead of first request |
+| `TTS_MAX_CHARS` | `2000` | max TTS input length |
+| `TTS_DEFAULT_SPEAKER` | `Ira` | default rumik voice |
+| `HF_TOKEN` | empty | Hugging Face token for gated SraVaani |
 
 ## Cloudflare Tunnel
 
@@ -242,4 +295,4 @@ STT_API_KEY=stt_live_...
 pytest
 ```
 
-API tests mock Whisper, the reranker, and the embedder so they do not need a GPU or model download.
+API tests mock Whisper, SraVaani, rumik-oss, the reranker, and the embedder so they do not need a GPU or model download.
