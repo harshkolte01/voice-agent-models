@@ -1,0 +1,327 @@
+{
+  "base": "https://notify-towers-shipment-bookstore.trycloudflare.com",
+  "phrase": "The meeting is at ten in the morning.",
+  "rows": [
+    {
+      "group": "health",
+      "owner": "-",
+      "check": "GET /health",
+      "status": 200,
+      "ok": true,
+      "client_ms": 782,
+      "server_ms": null,
+      "accuracy": null,
+      "detail": {
+        "status": "ok",
+        "model_loaded": true,
+        "reranker_loaded": true,
+        "embedder_loaded": true,
+        "tts_loaded": true,
+        "device": "cuda"
+      }
+    },
+    {
+      "group": "auth",
+      "owner": "invalid",
+      "check": "GET /v1/models bad key",
+      "status": 401,
+      "ok": true,
+      "client_ms": 311,
+      "server_ms": null,
+      "accuracy": null,
+      "detail": "rejected"
+    },
+    {
+      "group": "auth",
+      "owner": "Harsh",
+      "check": "GET /v1/models",
+      "status": 200,
+      "ok": true,
+      "client_ms": 43,
+      "server_ms": null,
+      "accuracy": null,
+      "detail": [
+        "whisper-large-v3-turbo",
+        "BAAI/bge-reranker-v2-m3",
+        "BAAI/bge-m3",
+        "kokoro-82m"
+      ]
+    },
+    {
+      "group": "embeddings",
+      "owner": "Harsh",
+      "check": "POST /v1/embeddings",
+      "status": 200,
+      "ok": true,
+      "client_ms": 386,
+      "server_ms": 329,
+      "accuracy": 0.5676,
+      "detail": {
+        "related_cosine": 0.9066,
+        "unrelated_cosine": 0.339,
+        "dim": 1024,
+        "model": "BAAI/bge-m3"
+      }
+    },
+    {
+      "group": "rerank",
+      "owner": "Harsh",
+      "check": "POST /v1/rerank",
+      "status": 200,
+      "ok": true,
+      "client_ms": 151,
+      "server_ms": 104,
+      "accuracy": 0.881,
+      "detail": {
+        "top_index": 0,
+        "top_doc": "standup is at 10am",
+        "model": "BAAI/bge-reranker-v2-m3"
+      }
+    },
+    {
+      "group": "tts",
+      "owner": "Harsh",
+      "check": "TTS af_heart",
+      "status": 200,
+      "ok": true,
+      "client_ms": 1648,
+      "server_ms": 1587,
+      "accuracy": null,
+      "detail": {
+        "x_model": "kokoro-82m",
+        "x_speaker": "af_heart",
+        "bytes": 110444,
+        "error": null
+      }
+    },
+    {
+      "group": "stt",
+      "owner": "Harsh",
+      "check": "STT from af_heart",
+      "status": 200,
+      "ok": true,
+      "client_ms": 649,
+      "server_ms": 547,
+      "accuracy": 0.875,
+      "detail": {
+        "transcript": "The meeting is at 10 in the morning.",
+        "wer": 0.125,
+        "rtf": 0.2378,
+        "duration": 2.3,
+        "model": "whisper-large-v3-turbo"
+      }
+    },
+    {
+      "group": "tts",
+      "owner": "Harsh",
+      "check": "TTS am_liam",
+      "status": 200,
+      "ok": true,
+      "client_ms": 451,
+      "server_ms": 399,
+      "accuracy": null,
+      "detail": {
+        "x_model": "kokoro-82m",
+        "x_speaker": "am_liam",
+        "bytes": 121244,
+        "error": null
+      }
+    },
+    {
+      "group": "stt",
+      "owner": "Harsh",
+      "check": "STT from am_liam",
+      "status": 200,
+      "ok": true,
+      "client_ms": 548,
+      "server_ms": 484,
+      "accuracy": 0.875,
+      "detail": {
+        "transcript": "The meeting is at 10 in the morning.",
+        "wer": 0.125,
+        "rtf": 0.1917,
+        "duration": 2.525,
+        "model": "whisper-large-v3-turbo"
+      }
+    },
+    {
+      "group": "tts",
+      "owner": "Harsh",
+      "check": "TTS bf_emma",
+      "status": 200,
+      "ok": true,
+      "client_ms": 2502,
+      "server_ms": 2437,
+      "accuracy": null,
+      "detail": {
+        "x_model": "kokoro-82m",
+        "x_speaker": "bf_emma",
+        "bytes": 130844,
+        "error": null
+      }
+    },
+    {
+      "group": "stt",
+      "owner": "Harsh",
+      "check": "STT from bf_emma",
+      "status": 200,
+      "ok": true,
+      "client_ms": 651,
+      "server_ms": 596,
+      "accuracy": 0.875,
+      "detail": {
+        "transcript": "The meeting is at 10 in the morning.",
+        "wer": 0.125,
+        "rtf": 0.2187,
+        "duration": 2.725,
+        "model": "whisper-large-v3-turbo"
+      }
+    },
+    {
+      "group": "auth",
+      "owner": "Bhoomi",
+      "check": "GET /v1/models",
+      "status": 200,
+      "ok": true,
+      "client_ms": 43,
+      "server_ms": null,
+      "accuracy": null,
+      "detail": [
+        "whisper-large-v3-turbo",
+        "BAAI/bge-reranker-v2-m3",
+        "BAAI/bge-m3",
+        "kokoro-82m"
+      ]
+    },
+    {
+      "group": "embeddings",
+      "owner": "Bhoomi",
+      "check": "POST /v1/embeddings",
+      "status": 200,
+      "ok": true,
+      "client_ms": 79,
+      "server_ms": 31,
+      "accuracy": 0.5676,
+      "detail": {
+        "related_cosine": 0.9066,
+        "unrelated_cosine": 0.339,
+        "dim": 1024,
+        "model": "BAAI/bge-m3"
+      }
+    },
+    {
+      "group": "rerank",
+      "owner": "Bhoomi",
+      "check": "POST /v1/rerank",
+      "status": 200,
+      "ok": true,
+      "client_ms": 67,
+      "server_ms": 27,
+      "accuracy": 0.881,
+      "detail": {
+        "top_index": 0,
+        "top_doc": "standup is at 10am",
+        "model": "BAAI/bge-reranker-v2-m3"
+      }
+    },
+    {
+      "group": "tts",
+      "owner": "Bhoomi",
+      "check": "TTS af_heart",
+      "status": 200,
+      "ok": true,
+      "client_ms": 150,
+      "server_ms": 99,
+      "accuracy": null,
+      "detail": {
+        "x_model": "kokoro-82m",
+        "x_speaker": "af_heart",
+        "bytes": 110444,
+        "error": null
+      }
+    },
+    {
+      "group": "stt",
+      "owner": "Bhoomi",
+      "check": "STT from af_heart",
+      "status": 200,
+      "ok": true,
+      "client_ms": 565,
+      "server_ms": 516,
+      "accuracy": 0.875,
+      "detail": {
+        "transcript": "The meeting is at 10 in the morning.",
+        "wer": 0.125,
+        "rtf": 0.2243,
+        "duration": 2.3,
+        "model": "whisper-large-v3-turbo"
+      }
+    },
+    {
+      "group": "tts",
+      "owner": "Bhoomi",
+      "check": "TTS am_liam",
+      "status": 200,
+      "ok": true,
+      "client_ms": 166,
+      "server_ms": 106,
+      "accuracy": null,
+      "detail": {
+        "x_model": "kokoro-82m",
+        "x_speaker": "am_liam",
+        "bytes": 121244,
+        "error": null
+      }
+    },
+    {
+      "group": "stt",
+      "owner": "Bhoomi",
+      "check": "STT from am_liam",
+      "status": 200,
+      "ok": true,
+      "client_ms": 538,
+      "server_ms": 490,
+      "accuracy": 0.875,
+      "detail": {
+        "transcript": "The meeting is at 10 in the morning.",
+        "wer": 0.125,
+        "rtf": 0.1941,
+        "duration": 2.525,
+        "model": "whisper-large-v3-turbo"
+      }
+    },
+    {
+      "group": "tts",
+      "owner": "Bhoomi",
+      "check": "TTS bf_emma",
+      "status": 200,
+      "ok": true,
+      "client_ms": 158,
+      "server_ms": 99,
+      "accuracy": null,
+      "detail": {
+        "x_model": "kokoro-82m",
+        "x_speaker": "bf_emma",
+        "bytes": 130844,
+        "error": null
+      }
+    },
+    {
+      "group": "stt",
+      "owner": "Bhoomi",
+      "check": "STT from bf_emma",
+      "status": 200,
+      "ok": true,
+      "client_ms": 544,
+      "server_ms": 495,
+      "accuracy": 0.875,
+      "detail": {
+        "transcript": "The meeting is at 10 in the morning.",
+        "wer": 0.125,
+        "rtf": 0.1817,
+        "duration": 2.725,
+        "model": "whisper-large-v3-turbo"
+      }
+    }
+  ]
+}

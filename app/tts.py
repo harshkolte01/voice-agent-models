@@ -95,6 +95,21 @@ def normalize_kokoro_voice(
     )
 
 
+def _pipeline_audio(item):
+    audio = getattr(item, "audio", None)
+    if audio is not None:
+        return audio
+    if isinstance(item, (tuple, list)) and len(item) >= 3:
+        return item[2]
+    getter = getattr(item, "__getitem__", None)
+    if callable(getter):
+        try:
+            return item[2]
+        except Exception:
+            pass
+    return item
+
+
 def _to_float32_audio(audio):
     import numpy as np
 
@@ -196,7 +211,9 @@ class KokoroEngine:
             pipeline = self._pipeline(lang_code)
             chunks = []
             for item in pipeline(stripped, voice=voice, speed=speed):
-                audio = item[2] if isinstance(item, (tuple, list)) and len(item) >= 3 else item
+                audio = _pipeline_audio(item)
+                if audio is None:
+                    continue
                 chunk = _to_float32_audio(audio)
                 if chunk.size:
                     chunks.append(chunk)

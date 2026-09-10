@@ -189,3 +189,15 @@ def test_kokoro_engine_mocked_synth() -> None:
     assert result.speaker == "af_heart"
     assert result.wav_bytes[:4] == b"RIFF"
     assert result.device == "cpu"
+
+
+def test_pipeline_audio_uses_audio_attribute() -> None:
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from app.tts import _pipeline_audio, _to_float32_audio
+
+    item = SimpleNamespace(graphemes="hi", phonemes="hˈaɪ", audio=np.ones(4, dtype=np.float32))
+    chunk = _to_float32_audio(_pipeline_audio(item))
+    assert chunk.shape == (4,)
