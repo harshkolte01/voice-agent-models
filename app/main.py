@@ -311,6 +311,7 @@ async def synthesize_speech(
             "X-Model": result.model,
             "X-Device": result.device,
             "X-Speaker": result.speaker,
+            "X-Sample-Rate": "24000",
         },
     )
 

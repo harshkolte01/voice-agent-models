@@ -191,6 +191,12 @@ def test_kokoro_engine_mocked_synth() -> None:
     assert result.device == "cpu"
 
 
+def test_configure_espeak_does_not_raise() -> None:
+    from app.tts import _configure_espeak
+
+    _configure_espeak()
+
+
 def test_pipeline_audio_uses_audio_attribute() -> None:
     from types import SimpleNamespace
 

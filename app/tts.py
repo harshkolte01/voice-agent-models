@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
+import os
 import re
 import threading
 import wave
 from dataclasses import dataclass
+from pathlib import Path
 
 from app.config import Settings
 from app.rerank import resolve_rerank_device
@@ -30,6 +33,7 @@ KOKORO_PACE_SPEED = {
     "steady": 1.0,
     "fast": 1.2,
 }
+logger = logging.getLogger("stt.tts")
 
 
 @dataclass
@@ -95,6 +99,31 @@ def normalize_kokoro_voice(
     )
 
 
+def _configure_espeak() -> None:
+    """Point phonemizer at espeak-ng so OOD words are not skipped (robotic gaps)."""
+    try:
+        import espeakng_loader
+
+        os.environ.setdefault(
+            "PHONEMIZER_ESPEAK_LIBRARY", espeakng_loader.get_library_path()
+        )
+        os.environ.setdefault("ESPEAK_DATA_PATH", espeakng_loader.get_data_path())
+        from phonemizer.backend.espeak.wrapper import EspeakWrapper
+
+        EspeakWrapper.set_library(espeakng_loader.get_library_path())
+        data_path = espeakng_loader.get_data_path()
+        if hasattr(EspeakWrapper, "set_data_path"):
+            EspeakWrapper.set_data_path(data_path)
+        else:
+            EspeakWrapper.data_path = data_path
+        return
+    except Exception:
+        pass
+    dll = Path(r"C:\Program Files\eSpeak NG\libespeak-ng.dll")
+    if dll.exists():
+        os.environ.setdefault("PHONEMIZER_ESPEAK_LIBRARY", str(dll))
+
+
 def _pipeline_audio(item):
     audio = getattr(item, "audio", None)
     if audio is not None:
@@ -123,8 +152,7 @@ def pcm_wav_bytes(audio, sample_rate: int = KOKORO_SAMPLE_RATE) -> bytes:
     import numpy as np
 
     samples = _to_float32_audio(audio)
-    pcm_i16 = np.clip(samples, -1.0, 1.0)
-    pcm_i16 = (pcm_i16 * 32767.0).astype("<i2")
+    pcm_i16 = np.clip(samples * 32767.0, -32767, 32767).astype(np.int16)
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as wav_file:
         wav_file.setnchannels(1)
@@ -166,6 +194,16 @@ class KokoroEngine:
     def ensure_loaded(self) -> None:
         with self._lock:
             self._pipeline(self.default_lang)
+            try:
+                list(
+                    self._pipelines[self.default_lang](
+                        "Ready.",
+                        voice=self.default_voice,
+                        speed=1,
+                    )
+                )
+            except Exception as exc:
+                logger.warning("Kokoro warmup skipped: %s", exc)
 
     def _pipeline(self, lang_code: str):
         pipeline = self._pipelines.get(lang_code)
@@ -177,6 +215,7 @@ class KokoroEngine:
             raise RuntimeError(
                 "Kokoro TTS is not installed. pip install 'kokoro>=0.9.4'"
             ) from exc
+        _configure_espeak()
         try:
             pipeline = KPipeline(
                 lang_code=lang_code,
