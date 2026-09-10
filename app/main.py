@@ -29,7 +29,6 @@ from app.schemas import (
 )
 from app.transcribe import Transcriber, public_model_id
 from app.tts import TtsEngine
-from app.gpu_slot import ExclusiveCudaSlot
 
 ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".ogg", ".flac", ".webm"}
 READ_CHUNK_BYTES = 1024 * 1024
@@ -79,20 +78,12 @@ async def lifespan(app: FastAPI):
 
     disable_broken_torchvision()
     settings = get_settings()
-    gpu_slot = ExclusiveCudaSlot()
-    app.state.gpu_slot = gpu_slot
-    app.state.transcriber = Transcriber.from_settings(settings, gpu_slot=gpu_slot)
+    app.state.transcriber = Transcriber.from_settings(settings)
     app.state.reranker = Reranker.from_settings(settings)
     app.state.embedder = Embedder.from_settings(settings)
     app.state.tts = (
-        TtsEngine.from_settings(settings, gpu_slot=gpu_slot)
-        if settings.tts_enabled
-        else None
+        TtsEngine.from_settings(settings) if settings.tts_enabled else None
     )
-    if settings.sravaani_enabled and settings.sravaani_load_on_startup:
-        app.state.transcriber.ensure_sravaani()
-    if app.state.tts is not None and settings.tts_load_on_startup:
-        app.state.tts.ensure_loaded()
     yield
     app.state.transcriber = None
     app.state.reranker = None
@@ -120,7 +111,6 @@ async def health() -> HealthResponse:
         model_loaded=bool(transcriber and transcriber.loaded),
         reranker_loaded=bool(reranker and reranker.loaded),
         embedder_loaded=bool(embedder and embedder.loaded),
-        sravaani_loaded=bool(transcriber and transcriber.sravaani_loaded),
         tts_loaded=bool(tts and tts.loaded),
         device=device,
     )
@@ -139,7 +129,11 @@ async def list_models(_: ApiKeyRecord = Depends(require_api_key)) -> ModelsRespo
     models.append(ModelInfo(id=reranker.model_name, type="rerank"))
     models.append(ModelInfo(id=embedder.model_name, type="embedding"))
     if tts is not None:
-        models.append(ModelInfo(id=tts.public_id, type="tts"))
+        tts_ids = getattr(tts, "public_ids", None)
+        if not tts_ids:
+            tts_ids = [tts.public_id]
+        for model_id in tts_ids:
+            models.append(ModelInfo(id=model_id, type="tts"))
     return ModelsResponse(models=models)
 
 
@@ -199,18 +193,6 @@ async def transcribe_audio(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:
-            message = str(exc)
-            if "401" in message or "gated" in message.lower() or "restricted" in message.lower():
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "SraVaani failed to load. Accept the license at "
-                        "https://huggingface.co/ARTPARK-IISc/SraVaani-1.0 and set HF_TOKEN. "
-                        f"Underlying error: {message[:300]}"
-                    ),
-                ) from exc
-            raise
         processing_ms = int((time.perf_counter() - started) * 1000)
     finally:
         if fd >= 0:
@@ -309,12 +291,8 @@ async def synthesize_speech(
         result = await tts.synthesize(
             text=body.input,
             speaker=body.speaker,
-            tone=body.tone,
-            accent=body.accent,
             pace=body.pace,
-            temperature=body.temperature,
-            top_k=body.top_k,
-            max_new_tokens=body.max_new_tokens,
+            model=body.model,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -330,8 +308,8 @@ async def synthesize_speech(
         media_type="audio/wav",
         headers={
             "X-Processing-Ms": str(processing_ms),
-            "X-Model": tts.public_id,
-            "X-Device": tts.device,
+            "X-Model": result.model,
+            "X-Device": result.device,
             "X-Speaker": result.speaker,
         },
     )

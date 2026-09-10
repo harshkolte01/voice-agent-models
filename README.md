@@ -1,6 +1,6 @@
 # Private STT API server
 
-Host-laptop speech-to-text, TTS, rerank, and embedding API. Whisper, SraVaani, rumik-oss, `BAAI/bge-reranker-v2-m3`, and `BAAI/bge-m3` stay on this machine. Clients only need:
+Host-laptop speech-to-text, TTS, rerank, and embedding API. Whisper `large-v3-turbo`, Kokoro-82M, `BAAI/bge-reranker-v2-m3`, and `BAAI/bge-m3` stay on this machine. Clients only need:
 
 ```env
 STT_API_URL=http://127.0.0.1:8000/v1/audio/transcriptions
@@ -14,6 +14,7 @@ STT_API_KEY=stt_live_...
 
 - Python 3.11+
 - [ffmpeg](https://ffmpeg.org/download.html) on `PATH` (faster-whisper uses it for mp3/m4a/ogg/webm)
+- [espeak-ng](https://github.com/espeak-ng/espeak-ng/releases) on `PATH` (Kokoro uses it for phonemes; typical Windows install is `C:\Program Files\eSpeak NG\`)
 - NVIDIA GPU + CUDA for `large-v3-turbo` at useful speed (CPU works, but is slow)
 - Optional: [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) to expose localhost over HTTPS
 
@@ -28,7 +29,7 @@ pip install --upgrade torch torchvision torchaudio --index-url https://download.
 copy .env.example .env
 ```
 
-`pip install torch` from PyPI is CPU-only. The second command installs matching CUDA 12.8 wheels (`torch`, `torchvision`, `torchaudio`) so rerank, embeddings, SraVaani, and rumik-oss can use the GPU. Those three packages must come from the same index; a mismatched `torchvision` crashes Transformers with `operator torchvision::nms does not exist`. Whisper uses CTranslate2 and does not depend on that Torch build.
+`pip install torch` from PyPI is CPU-only. The second command installs matching CUDA 12.8 wheels (`torch`, `torchvision`, `torchaudio`) so rerank, embeddings, and Kokoro can use the GPU. Those three packages must come from the same index; a mismatched `torchvision` crashes Transformers with `operator torchvision::nms does not exist`. Whisper uses CTranslate2 and does not depend on that Torch build.
 
 ## Generate an API key
 
@@ -65,16 +66,14 @@ Each request is logged in IST with key id, client IP (Cloudflare `CF-Connecting-
 2026-09-08 16:41:12 IST  key=dev-a  ip=49.36.11.20  IN  POST /v1/embeddings  200  54ms
 ```
 
-First start downloads `large-v3-turbo` via faster-whisper (CTranslate2), plus `BAAI/bge-reranker-v2-m3` and `BAAI/bge-m3` via Hugging Face. SraVaani and rumik-oss stay **lazy**: they download and occupy the GPU only on first use, and they swap with each other so both are not in VRAM at once.
-
-SraVaani is gated. Accept the license at [ARTPARK-IISc/SraVaani-1.0](https://huggingface.co/ARTPARK-IISc/SraVaani-1.0) and set `HF_TOKEN` in `.env`. rumik-oss 1 is CC-BY-NC (research / non-commercial); see [the model card](https://huggingface.co/rumik-ai/rumik-oss-1).
+First start downloads `large-v3-turbo` via faster-whisper (CTranslate2), plus `BAAI/bge-reranker-v2-m3`, `BAAI/bge-m3`, and Kokoro-82M (`hexgrad/Kokoro-82M`, ~200 MB). All of these stay resident. Kokoro is Apache-2.0.
 
 ## API
 
 ### `GET /health` (no auth)
 
 ```json
-{ "status": "ok", "model_loaded": true, "reranker_loaded": true, "embedder_loaded": true, "sravaani_loaded": false, "tts_loaded": false, "device": "cuda" }
+{ "status": "ok", "model_loaded": true, "reranker_loaded": true, "embedder_loaded": true, "tts_loaded": true, "device": "cuda" }
 ```
 
 ### `GET /v1/models`
@@ -85,10 +84,9 @@ Header: `Authorization: Bearer stt_live_...`
 {
   "models": [
     { "id": "whisper-large-v3-turbo", "type": "stt" },
-    { "id": "sravaani-1.0", "type": "stt" },
     { "id": "BAAI/bge-reranker-v2-m3", "type": "rerank" },
     { "id": "BAAI/bge-m3", "type": "embedding" },
-    { "id": "rumik-oss-1", "type": "tts" }
+    { "id": "kokoro-82m", "type": "tts" }
   ]
 }
 ```
@@ -101,7 +99,7 @@ Header: `Authorization: Bearer stt_live_...`
 
 - `file` (required): wav, mp3, m4a, ogg, flac, or webm (max 25 MB)
 - `language` (optional): e.g. `en` or `hi`
-- `model` (optional): `whisper-large-v3-turbo` (default) or `sravaani-1.0`
+- `model` (optional): `whisper-large-v3-turbo` (default)
 
 ```json
 {
@@ -175,22 +173,11 @@ Header: `Authorization: Bearer stt_live_...`
 JSON body (returns `audio/wav`, 24 kHz mono):
 
 - `input` (required): text to speak (alias: `text`, max 2000 chars)
-- `speaker` (optional): `Ira`, `Aisha`, `Siya`, or `Zoya` (alias: `voice`)
-- `tone` (optional): `happy`, `sad`, `angry`, `excited`, `professional`
-- `accent` (optional): `Hindi`, `Telugu`, `Tamil`, `Kannada`, `Bengali`, `Punjabi`, `Indian English`
+- `model` (optional): `kokoro-82m` (default)
+- `speaker` (optional, alias: `voice`): Kokoro voice id such as `af_heart` (default). Short names `Ira`, `Aisha`, `Siya`, and `Zoya` still map onto Kokoro voices
 - `pace` (optional): `slow`, `fast`, `steady`
 
-You can also put a raw rumik description in `input`:
-
-```text
-<description="happy, Hindi accent, steady pace"> नमस्ते, आज आपका दिन कैसा रहा?
-```
-
-Inline vocalizations supported by the model: `<laugh>`, `<chuckle>`, `<sigh>`.
-
 Response headers: `X-Processing-Ms`, `X-Model`, `X-Device`, `X-Speaker`.
-
-rumik-oss is about 3B parameters. On a 12 GB GPU it is swapped with SraVaani so they do not sit in VRAM together. Do not set both `SRAVAANI_LOAD_ON_STARTUP` and `TTS_LOAD_ON_STARTUP`.
 
 ### curl
 
@@ -205,14 +192,8 @@ curl.exe -H "Authorization: Bearer $env:STT_API_KEY" `
   http://127.0.0.1:8000/v1/audio/transcriptions
 
 curl.exe -H "Authorization: Bearer $env:STT_API_KEY" `
-  -F "file=@hindi.mp3;type=audio/mpeg" `
-  -F "model=sravaani-1.0" `
-  -F "language=hi" `
-  http://127.0.0.1:8000/v1/audio/transcriptions
-
-curl.exe -H "Authorization: Bearer $env:STT_API_KEY" `
   -H "Content-Type: application/json" `
-  -d '{ "input": "Namaste", "speaker": "Ira", "tone": "happy", "accent": "Hindi", "pace": "steady" }' `
+  -d '{ "input": "Namaste", "speaker": "af_heart" }' `
   http://127.0.0.1:8000/v1/audio/speech `
   --output speech.wav
 
@@ -247,17 +228,11 @@ Copied from `.env.example`:
 | `EMBED_DEVICE` | `auto` | PyTorch `cuda` if a GPU is visible, else `cpu` |
 | `EMBED_MAX_TEXTS` | `64` | max strings per embeddings request |
 | `EMBED_MAX_LENGTH` | `8192` | tokenizer max tokens per string |
-| `SRAVAANI_ENABLED` | `true` | expose `sravaani-1.0` on transcriptions |
-| `SRAVAANI_MODEL` | `ARTPARK-IISc/SraVaani-1.0` | Hugging Face id (gated; needs `HF_TOKEN`) |
-| `SRAVAANI_DEVICE` | `auto` | PyTorch device for SraVaani |
-| `SRAVAANI_LOAD_ON_STARTUP` | `false` | load SraVaani at boot instead of first request |
-| `TTS_ENABLED` | `true` | expose rumik-oss on `/v1/audio/speech` |
-| `TTS_MODEL` | `rumik-ai/rumik-oss-1` | Hugging Face id |
-| `TTS_DEVICE` | `auto` | PyTorch device for rumik-oss |
-| `TTS_LOAD_ON_STARTUP` | `false` | load rumik-oss at boot instead of first request |
+| `TTS_ENABLED` | `true` | expose Kokoro on `/v1/audio/speech` |
+| `TTS_DEVICE` | `auto` | PyTorch device for Kokoro |
 | `TTS_MAX_CHARS` | `2000` | max TTS input length |
-| `TTS_DEFAULT_SPEAKER` | `Ira` | default rumik voice |
-| `HF_TOKEN` | empty | Hugging Face token for gated SraVaani |
+| `TTS_KOKORO_VOICE` | `af_heart` | default Kokoro voice |
+| `TTS_KOKORO_LANG` | `a` | fallback Kokoro lang code (`a` = American English) |
 
 ## Cloudflare Tunnel
 
@@ -295,4 +270,4 @@ STT_API_KEY=stt_live_...
 pytest
 ```
 
-API tests mock Whisper, SraVaani, rumik-oss, the reranker, and the embedder so they do not need a GPU or model download.
+API tests mock Whisper, Kokoro, the reranker, and the embedder so they do not need a GPU or model download.

@@ -6,7 +6,6 @@ class HealthResponse(BaseModel):
     model_loaded: bool
     reranker_loaded: bool
     embedder_loaded: bool
-    sravaani_loaded: bool = False
     tts_loaded: bool = False
     device: str
 
@@ -93,14 +92,10 @@ class SpeechRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     input: str = Field(min_length=1, validation_alias=AliasChoices("input", "text"))
-    speaker: str = "Ira"
+    model: str | None = None
+    speaker: str = "af_heart"
     voice: str | None = None
-    tone: str | None = None
-    accent: str | None = None
     pace: str | None = None
-    temperature: float = Field(default=0.8, ge=0, le=2)
-    top_k: int = Field(default=30, ge=0, le=2048)
-    max_new_tokens: int = Field(default=2048, ge=8, le=3072)
 
     @field_validator("input")
     @classmethod

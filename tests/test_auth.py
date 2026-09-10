@@ -120,15 +120,41 @@ def test_public_model_id() -> None:
 
 
 def test_normalize_stt_model() -> None:
-    from app.transcribe import SRAVAANI_PUBLIC_ID, normalize_stt_model
+    from app.transcribe import normalize_stt_model
 
     whisper = "whisper-large-v3-turbo"
     assert normalize_stt_model(None, whisper) == whisper
     assert normalize_stt_model("whisper", whisper) == whisper
-    assert normalize_stt_model("sravaani", whisper) == SRAVAANI_PUBLIC_ID
-    assert normalize_stt_model("ARTPARK-IISc/SraVaani-1.0", whisper) == SRAVAANI_PUBLIC_ID
+    assert normalize_stt_model("large-v3-turbo", whisper) == whisper
+    with pytest.raises(ValueError, match="Unknown STT model"):
+        normalize_stt_model("sravaani-1.0", whisper)
     with pytest.raises(ValueError, match="Unknown STT model"):
         normalize_stt_model("omni-7b", whisper)
+
+
+def test_normalize_tts_model() -> None:
+    from app.tts import KOKORO_PUBLIC_ID, normalize_tts_model
+
+    assert normalize_tts_model(None) == KOKORO_PUBLIC_ID
+    assert normalize_tts_model("kokoro") == KOKORO_PUBLIC_ID
+    assert normalize_tts_model("hexgrad/Kokoro-82M") == KOKORO_PUBLIC_ID
+    with pytest.raises(ValueError, match="Unknown TTS model"):
+        normalize_tts_model("rumik-oss-1")
+    with pytest.raises(ValueError, match="Unknown TTS model"):
+        normalize_tts_model("xtts")
+
+
+def test_normalize_kokoro_voice() -> None:
+    from app.tts import kokoro_speed_for_pace, lang_code_for_voice, normalize_kokoro_voice
+
+    assert normalize_kokoro_voice(None) == "af_heart"
+    assert normalize_kokoro_voice("Ira") == "af_heart"
+    assert normalize_kokoro_voice("Zoya") == "af_nicole"
+    assert normalize_kokoro_voice("am_liam") == "am_liam"
+    assert lang_code_for_voice("bf_emma") == "b"
+    assert kokoro_speed_for_pace("fast") == 1.2
+    with pytest.raises(ValueError, match="Kokoro voice"):
+        normalize_kokoro_voice("NotAVoice")
 
 
 def test_speech_request_aliases() -> None:
@@ -139,37 +165,27 @@ def test_speech_request_aliases() -> None:
     assert body.speaker == "Zoya"
 
 
-def test_build_tts_prompt() -> None:
-    from app.tts import build_tts_prompt, normalize_speaker
+def test_kokoro_engine_mocked_synth() -> None:
+    import numpy as np
 
-    assert normalize_speaker("ira") == "Ira"
-    assert build_tts_prompt("hello") == "hello"
-    assert (
-        build_tts_prompt("hello", tone="happy", accent="Hindi", pace="steady")
-        == '<description="happy, Hindi accent, steady pace"> hello'
+    from app.tts import KokoroEngine
+
+    engine = KokoroEngine(
+        device="cpu",
+        max_chars=2000,
+        default_voice="af_heart",
+        default_lang="a",
     )
-    raw = '<description="sad, Tamil accent, slow pace"> already tagged'
-    assert build_tts_prompt(raw, tone="happy") == raw
 
+    def fake_pipeline(_lang: str):
+        def generate(text, voice, speed):
+            yield ("gs", "ps", np.full(8, 0.1, dtype=np.float32))
 
-def test_resolve_rumik_engine_class() -> None:
-    from types import SimpleNamespace
+        return generate
 
-    from app.tts import resolve_rumik_engine_class
-
-    class RumikOSS:
-        pass
-
-    class TinyAya:
-        pass
-
-    assert resolve_rumik_engine_class(SimpleNamespace(RumikOSS=RumikOSS, TinyAya=TinyAya)) is RumikOSS
-    assert resolve_rumik_engine_class(SimpleNamespace(TinyAya=TinyAya)) is TinyAya
-    with pytest.raises(RuntimeError, match="RumikOSS or TinyAya"):
-        resolve_rumik_engine_class(SimpleNamespace())
-
-
-def test_resolve_hf_token_prefers_explicit() -> None:
-    from app.sravaani import resolve_hf_token
-
-    assert resolve_hf_token("  hf_abc  ") == "hf_abc"
+    engine._pipeline = fake_pipeline  # type: ignore[method-assign]
+    result = engine.synthesize_sync("hello", speaker="af_heart", pace="steady")
+    assert result.model == "kokoro-82m"
+    assert result.speaker == "af_heart"
+    assert result.wav_bytes[:4] == b"RIFF"
+    assert result.device == "cpu"

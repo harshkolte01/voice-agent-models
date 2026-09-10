@@ -42,11 +42,7 @@ def dummy_transcriber() -> MagicMock:
     dummy.loaded = True
     dummy.device = "cpu"
     dummy.model_name = "large-v3-turbo"
-    dummy.sravaani_loaded = False
-    dummy.listed_stt_models.return_value = [
-        "whisper-large-v3-turbo",
-        "sravaani-1.0",
-    ]
+    dummy.listed_stt_models.return_value = ["whisper-large-v3-turbo"]
 
     async def fake_transcribe(
         audio_path: str,
@@ -116,27 +112,31 @@ def dummy_embedder() -> MagicMock:
 @pytest.fixture
 def dummy_tts() -> MagicMock:
     dummy = MagicMock()
-    dummy.loaded = False
+    dummy.loaded = True
     dummy.enabled = True
     dummy.device = "cpu"
-    dummy.model_name = "rumik-ai/rumik-oss-1"
-    dummy.public_id = "rumik-oss-1"
+    dummy.model_name = "kokoro-82m"
+    dummy.public_id = "kokoro-82m"
+    dummy.public_ids = ["kokoro-82m"]
 
     async def fake_synthesize(
         text: str,
         speaker: str | None = None,
-        tone: str | None = None,
-        accent: str | None = None,
         pace: str | None = None,
-        temperature: float = 0.8,
-        top_k: int = 30,
-        max_new_tokens: int = 2048,
+        model: str | None = None,
     ):
-        from app.tts import build_tts_prompt, normalize_speaker
+        from app.tts import KOKORO_PUBLIC_ID, kokoro_speed_for_pace, normalize_kokoro_voice, normalize_tts_model
 
-        chosen = normalize_speaker(speaker or "Ira")
-        prompt = build_tts_prompt(text, tone=tone, accent=accent, pace=pace)
-        return SpeechResult(wav_bytes=b"RIFFWAV", speaker=chosen, prompt=prompt)
+        normalize_tts_model(model)
+        voice = normalize_kokoro_voice(speaker)
+        kokoro_speed_for_pace(pace)
+        return SpeechResult(
+            wav_bytes=b"RIFFWAV",
+            speaker=voice,
+            prompt=text,
+            model=KOKORO_PUBLIC_ID,
+            device="cpu",
+        )
 
     dummy.synthesize.side_effect = fake_synthesize
     return dummy
@@ -180,8 +180,7 @@ def test_health_unauthenticated(client: TestClient) -> None:
     assert body["model_loaded"] is True
     assert body["reranker_loaded"] is True
     assert body["embedder_loaded"] is True
-    assert body["sravaani_loaded"] is False
-    assert body["tts_loaded"] is False
+    assert body["tts_loaded"] is True
     assert body["device"] == "cpu"
 
 
@@ -234,10 +233,9 @@ def test_models_ok(client: TestClient, api_key: str) -> None:
     assert response.json() == {
         "models": [
             {"id": "whisper-large-v3-turbo", "type": "stt"},
-            {"id": "sravaani-1.0", "type": "stt"},
             {"id": "BAAI/bge-reranker-v2-m3", "type": "rerank"},
             {"id": "BAAI/bge-m3", "type": "embedding"},
-            {"id": "rumik-oss-1", "type": "tts"},
+            {"id": "kokoro-82m", "type": "tts"},
         ]
     }
 
@@ -507,7 +505,7 @@ def test_embed_rejects_over_max_texts(
     dummy_embedder.encode.assert_not_called()
 
 
-def test_transcribe_sravaani_model(
+def test_transcribe_rejects_removed_model(
     client: TestClient,
     api_key: str,
     dummy_transcriber: MagicMock,
@@ -518,10 +516,8 @@ def test_transcribe_sravaani_model(
         files={"file": ("test.wav", b"fake-audio", "audio/wav")},
         data={"language": "hi", "model": "sravaani-1.0"},
     )
-    assert response.status_code == 200
-    assert response.json()["model"] == "sravaani-1.0"
-    kwargs = dummy_transcriber.transcribe.call_args.kwargs
-    assert kwargs["model"] == "sravaani-1.0"
+    assert response.status_code == 400
+    assert "Unknown STT model" in response.json()["detail"]
 
 
 def test_transcribe_unknown_model(client: TestClient, api_key: str) -> None:
@@ -550,16 +546,16 @@ def test_speech_ok(client: TestClient, api_key: str, dummy_tts: MagicMock) -> No
         json={
             "input": "Namaste",
             "speaker": "Ira",
-            "tone": "happy",
-            "accent": "Hindi",
             "pace": "steady",
         },
     )
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("audio/wav")
     assert response.content == b"RIFFWAV"
-    assert response.headers["x-model"] == "rumik-oss-1"
-    assert response.headers["x-speaker"] == "Ira"
+    assert response.headers["x-model"] == "kokoro-82m"
+    assert response.headers["x-speaker"] == "af_heart"
+    kwargs = dummy_tts.synthesize.call_args.kwargs
+    assert kwargs["model"] is None
     dummy_tts.synthesize.assert_called()
 
 
@@ -570,6 +566,8 @@ def test_speech_voice_alias(client: TestClient, api_key: str, dummy_tts: MagicMo
         json={"text": "hello", "voice": "Zoya"},
     )
     assert response.status_code == 200
+    assert response.headers["x-model"] == "kokoro-82m"
+    assert response.headers["x-speaker"] == "af_nicole"
     kwargs = dummy_tts.synthesize.call_args.kwargs
     assert kwargs["speaker"] == "Zoya"
     assert kwargs["text"] == "hello"
@@ -582,4 +580,37 @@ def test_speech_rejects_bad_speaker(client: TestClient, api_key: str) -> None:
         json={"input": "hello", "speaker": "NotAVoice"},
     )
     assert response.status_code == 400
-    assert "speaker must be one of" in response.json()["detail"]
+    assert "Kokoro voice" in response.json()["detail"]
+
+
+def test_speech_rejects_rumik_model(client: TestClient, api_key: str) -> None:
+    response = client.post(
+        "/v1/audio/speech",
+        headers=auth_header(api_key),
+        json={"input": "Namaste", "model": "rumik-oss-1", "speaker": "Ira"},
+    )
+    assert response.status_code == 400
+    assert "Unknown TTS model" in response.json()["detail"]
+
+
+def test_speech_unknown_model(client: TestClient, api_key: str) -> None:
+    response = client.post(
+        "/v1/audio/speech",
+        headers=auth_header(api_key),
+        json={"input": "hello", "model": "nope"},
+    )
+    assert response.status_code == 400
+    assert "Unknown TTS model" in response.json()["detail"]
+
+
+def test_speech_kokoro_native_voice(
+    client: TestClient, api_key: str, dummy_tts: MagicMock
+) -> None:
+    response = client.post(
+        "/v1/audio/speech",
+        headers=auth_header(api_key),
+        json={"input": "hello", "model": "kokoro-82m", "speaker": "am_liam"},
+    )
+    assert response.status_code == 200
+    assert response.headers["x-model"] == "kokoro-82m"
+    assert response.headers["x-speaker"] == "am_liam"
