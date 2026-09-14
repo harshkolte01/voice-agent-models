@@ -12,6 +12,7 @@ from pathlib import Path
 
 from app.config import Settings
 from app.rerank import resolve_rerank_device
+from app.speech_text import prepare_speech_text
 
 
 KOKORO_PUBLIC_ID = "kokoro-82m"
@@ -238,18 +239,23 @@ class KokoroEngine:
         import numpy as np
 
         normalize_tts_model(model)
-        stripped = text.strip()
-        if not stripped:
+        raw = text.strip()
+        if not raw:
             raise ValueError("input must not be empty")
-        if len(stripped) > self.max_chars:
+        if len(raw) > self.max_chars:
             raise ValueError(f"input must be at most {self.max_chars} characters")
+        spoken = prepare_speech_text(raw)
+        if not spoken:
+            raise ValueError("input has no speakable text after removing Markdown")
+        if spoken != raw:
+            logger.debug("TTS sanitized %d chars -> %d chars", len(raw), len(spoken))
         voice = normalize_kokoro_voice(speaker, self.default_voice)
         lang_code = lang_code_for_voice(voice, self.default_lang)
         speed = kokoro_speed_for_pace(pace)
         with self._lock:
             pipeline = self._pipeline(lang_code)
             chunks = []
-            for item in pipeline(stripped, voice=voice, speed=speed):
+            for item in pipeline(spoken, voice=voice, speed=speed):
                 audio = _pipeline_audio(item)
                 if audio is None:
                     continue
@@ -262,7 +268,7 @@ class KokoroEngine:
         return SpeechResult(
             wav_bytes=wav_bytes,
             speaker=voice,
-            prompt=stripped,
+            prompt=spoken,
             model=KOKORO_PUBLIC_ID,
             device=self.device,
         )

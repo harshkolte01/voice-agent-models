@@ -177,18 +177,40 @@ def test_kokoro_engine_mocked_synth() -> None:
         default_lang="a",
     )
 
+    captured: dict[str, str] = {}
+
     def fake_pipeline(_lang: str):
         def generate(text, voice, speed):
+            captured["text"] = text
             yield ("gs", "ps", np.full(8, 0.1, dtype=np.float32))
 
         return generate
 
     engine._pipeline = fake_pipeline  # type: ignore[method-assign]
-    result = engine.synthesize_sync("hello", speaker="af_heart", pace="steady")
+    result = engine.synthesize_sync(
+        "**Hello** _world_. See [docs](https://example.com).",
+        speaker="af_heart",
+        pace="steady",
+    )
+    assert captured["text"] == "Hello world. See docs."
+    assert result.prompt == "Hello world. See docs."
     assert result.model == "kokoro-82m"
     assert result.speaker == "af_heart"
     assert result.wav_bytes[:4] == b"RIFF"
     assert result.device == "cpu"
+
+
+def test_kokoro_engine_rejects_markdown_only_input() -> None:
+    from app.tts import KokoroEngine
+
+    engine = KokoroEngine(
+        device="cpu",
+        max_chars=2000,
+        default_voice="af_heart",
+        default_lang="a",
+    )
+    with pytest.raises(ValueError, match="no speakable text"):
+        engine.synthesize_sync("***")
 
 
 def test_configure_espeak_does_not_raise() -> None:

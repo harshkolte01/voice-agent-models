@@ -172,7 +172,7 @@ Header: `Authorization: Bearer stt_live_...`
 
 JSON body (returns `audio/wav`, 24 kHz mono):
 
-- `input` (required): text to speak (alias: `text`, max 2000 chars)
+- `input` (required): text to speak (alias: `text`, max 2000 chars). Markdown is stripped on this server before Kokoro, so `*`, `#`, links, and similar markup are not spoken. Cloudflare, LAN, and local callers all hit the same path.
 - `model` (optional): `kokoro-82m` (default)
 - `speaker` (optional, alias: `voice`): Kokoro voice id such as `af_heart` (default). Short names `Ira`, `Aisha`, `Siya`, and `Zoya` still map onto Kokoro voices
 - `pace` (optional): `slow`, `fast`, `steady`
