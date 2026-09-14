@@ -66,6 +66,27 @@ Each request is logged in IST with key id, client IP (Cloudflare `CF-Connecting-
 2026-09-08 16:41:12 IST  key=dev-a  ip=49.36.11.20  IN  POST /v1/embeddings  200  54ms
 ```
 
+### Ops dashboard
+
+Live request board at `/ops` (localhost or the Cloudflare URL). It shows key id, path, status, total latency, inference time, model, device, IP, country, and a system strip (model load, CPU/RAM/GPU).
+
+Set a dedicated operator token in `.env` (not an API client key):
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(24))"
+```
+
+```env
+STT_OPS_TOKEN=paste-the-token-here
+```
+
+Restart the API process, then open:
+
+- `http://127.0.0.1:8000/ops`
+- `https://<your-tunnel>.trycloudflare.com/ops`
+
+Log in with `STT_OPS_TOKEN`. Without that env var, `/ops` stays off (404). The board is cookie-gated so the tunnel cannot be scraped by callers who only have `STT_API_KEY`.
+
 First start downloads `large-v3-turbo` via faster-whisper (CTranslate2), plus `BAAI/bge-reranker-v2-m3`, `BAAI/bge-m3`, and Kokoro-82M (`hexgrad/Kokoro-82M`, ~200 MB). All of these stay resident. Kokoro is Apache-2.0.
 
 ## API
@@ -233,6 +254,8 @@ Copied from `.env.example`:
 | `TTS_MAX_CHARS` | `2000` | max TTS input length |
 | `TTS_KOKORO_VOICE` | `af_heart` | default Kokoro voice |
 | `TTS_KOKORO_LANG` | `a` | fallback Kokoro lang code (`a` = American English) |
+| `STT_OPS_TOKEN` | empty | operator login for `/ops` (required for Cloudflare) |
+| `STT_OPS_STORE_SIZE` | `2000` | in-memory request history cap |
 
 ## Cloudflare Tunnel
 

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>STT ops login</title>
+  {% include "ops_styles.html" %}
+</head>
+<body>
+  <div class="login-shell wrap">
+    <div class="card">
+      <h1>STT <span style="color: var(--mint)">OPS</span></h1>
+      <p>Same page on localhost or the Cloudflare URL. Enter the operator token from <code>STT_OPS_TOKEN</code>.</p>
+      <form method="post" action="/ops/login">
+        <input type="password" name="token" autocomplete="current-password" placeholder="ops token" required>
+        <button class="primary" type="submit">Open board</button>
+        <div class="error">{% if error %}{{ error }}{% endif %}</div>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

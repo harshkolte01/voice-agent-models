@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>STT ops</title>
+  {% include "ops_styles.html" %}
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <h1 class="brand">STT <span>OPS</span></h1>
+      <div class="counts">
+        <div>rows <b id="count">0</b></div>
+        <div>avg <b id="avg">—</b></div>
+        <div>errors <b id="errors">0</b></div>
+      </div>
+      <div class="live"><span class="pulse" id="pulse"></span> live IST</div>
+      <form method="post" action="/ops/logout"><button type="submit">Lock</button></form>
+    </header>
+    <div class="layout">
+      <aside class="panel sys" id="system">
+        <h2>Rack</h2>
+        <div id="engines"></div>
+        <div class="stat"><span>CPU</span><b id="cpu">—</b></div>
+        <div class="stat"><span>RAM</span><b id="ram">—</b></div>
+        <div class="stat"><span>GPU</span><b id="gpu">—</b></div>
+      </aside>
+      <section class="panel">
+        <div class="filters">
+          <select id="keyFilter"><option value="">all keys</option></select>
+          <select id="pathFilter">
+            <option value="">all paths</option>
+            <option value="/v1/audio/transcriptions">transcriptions</option>
+            <option value="/v1/audio/speech">speech</option>
+            <option value="/v1/embeddings">embeddings</option>
+            <option value="/v1/rerank">rerank</option>
+            <option value="/v1/models">models</option>
+          </select>
+          <select id="statusFilter">
+            <option value="">all status</option>
+            <option value="2xx">2xx</option>
+            <option value="4xx">4xx</option>
+            <option value="5xx">5xx</option>
+          </select>
+          <input id="minMs" type="number" min="0" placeholder="min ms">
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>time</th>
+                <th>key</th>
+                <th>call</th>
+                <th>status</th>
+                <th>total</th>
+                <th>infer</th>
+                <th>model</th>
+                <th>device</th>
+                <th>client</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+          <div class="empty" id="empty">Waiting for API traffic…</div>
+        </div>
+        <div class="drawer" id="drawer"></div>
+      </section>
+    </div>
+  </div>
+  <script>
+    const rowsEl = document.getElementById("rows");
+    const emptyEl = document.getElementById("empty");
+    const drawerEl = document.getElementById("drawer");
+    const keyFilter = document.getElementById("keyFilter");
+    const pathFilter = document.getElementById("pathFilter");
+    const statusFilter = document.getElementById("statusFilter");
+    const minMs = document.getElementById("minMs");
+    let selectedId = null;
+    let knownKeys = [];
+
+    function statusClass(code) {
+      if (code >= 500) return "bad";
+      if (code >= 400) return "warn";
+      return "ok";
+    }
+
+    function dash(value) {
+      return value === null || value === undefined || value === "" ? "—" : value;
+    }
+
+    function esc(value) {
+      return String(dash(value))
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function engineRow(name, info) {
+      const on = Boolean(info && info.loaded);
+      return `<div class="engine">
+        <div class="dot ${on ? "on" : "off"}"></div>
+        <div>
+          <div>${name} · ${on ? "hot" : "cold"}</div>
+          <div class="meta">${dash(info && info.model)} · ${dash(info && info.device)}</div>
+        </div>
+      </div>`;
+    }
+
+    async function loadSystem() {
+      const res = await fetch("/ops/api/system", { credentials: "same-origin" });
+      if (res.status === 401) {
+        location.reload();
+        return;
+      }
+      if (!res.ok) return;
+      const data = await res.json();
+      document.getElementById("engines").innerHTML = [
+        engineRow("STT", data.stt),
+        engineRow("TTS", data.tts),
+        engineRow("Embed", data.embed),
+        engineRow("Rerank", data.rerank),
+      ].join("");
+      document.getElementById("cpu").textContent =
+        data.cpu_percent == null ? "—" : data.cpu_percent.toFixed(0) + "%";
+      document.getElementById("ram").textContent = data.ram
+        ? `${data.ram.used_gb} / ${data.ram.total_gb} GB`
+        : "—";
+      document.getElementById("gpu").textContent = data.gpu
+        ? `${data.gpu.allocated_gb} / ${data.gpu.total_gb} GB · ${data.gpu.name}`
+        : "—";
+    }
+
+    function renderKeys(keys) {
+      if (JSON.stringify(keys) === JSON.stringify(knownKeys)) return;
+      knownKeys = keys;
+      const current = keyFilter.value;
+      keyFilter.innerHTML = `<option value="">all keys</option>` +
+        keys.map((key) => `<option value="${esc(key)}">${esc(key)}</option>`).join("");
+      keyFilter.value = current;
+    }
+
+    function showDrawer(item) {
+      selectedId = item.id;
+      drawerEl.classList.add("open");
+      const fields = [
+        ["id", item.id],
+        ["time", item.ts_ist],
+        ["key", item.key_id],
+        ["method", item.method],
+        ["path", item.path],
+        ["status", item.status],
+        ["total ms", item.duration_ms],
+        ["infer ms", item.processing_ms],
+        ["model", item.model],
+        ["device", item.device],
+        ["speaker", item.speaker],
+        ["bytes in", item.request_bytes],
+        ["ip", item.ip],
+        ["country", item.country],
+      ];
+      drawerEl.innerHTML = fields.map(([label, value]) =>
+        `<div><span>${label}</span>${esc(value)}</div>`
+      ).join("");
+    }
+
+    async function loadRequests() {
+      const params = new URLSearchParams();
+      if (keyFilter.value) params.set("key", keyFilter.value);
+      if (pathFilter.value) params.set("path", pathFilter.value);
+      if (statusFilter.value) params.set("status", statusFilter.value);
+      if (minMs.value) params.set("min_ms", minMs.value);
+      const res = await fetch("/ops/api/requests?" + params.toString(), { credentials: "same-origin" });
+      if (res.status === 401) {
+        location.reload();
+        return;
+      }
+      if (!res.ok) return;
+      const data = await res.json();
+      renderKeys(data.keys || []);
+      const items = data.requests || [];
+      document.getElementById("count").textContent = String(items.length);
+      const errors = items.filter((item) => item.status >= 400).length;
+      document.getElementById("errors").textContent = String(errors);
+      const avg = items.length
+        ? Math.round(items.reduce((sum, item) => sum + item.duration_ms, 0) / items.length)
+        : null;
+      document.getElementById("avg").textContent = avg == null ? "—" : avg + "ms";
+      emptyEl.style.display = items.length ? "none" : "block";
+      rowsEl.innerHTML = items.map((item) => `
+        <tr data-id="${esc(item.id)}" class="${item.id === selectedId ? "active" : ""}">
+          <td>${esc(item.ts_ist.replace(" IST", ""))}</td>
+          <td>${esc(item.key_id)}</td>
+          <td>${esc(item.method)} ${esc(item.path)}</td>
+          <td class="${statusClass(item.status)}">${esc(item.status)}</td>
+          <td>${esc(item.duration_ms)}ms</td>
+          <td>${item.processing_ms == null ? "—" : esc(item.processing_ms) + "ms"}</td>
+          <td>${esc(item.model)}</td>
+          <td>${esc(item.device)}</td>
+          <td>${esc(item.ip)} ${esc(item.country)}</td>
+        </tr>
+      `).join("");
+      rowsEl.querySelectorAll("tr").forEach((row, index) => {
+        row.addEventListener("click", () => showDrawer(items[index]));
+      });
+      if (selectedId) {
+        const still = items.find((item) => item.id === selectedId);
+        if (still) showDrawer(still);
+      }
+    }
+
+    ["change", "input"].forEach((eventName) => {
+      [keyFilter, pathFilter, statusFilter, minMs].forEach((el) => {
+        el.addEventListener(eventName, () => loadRequests());
+      });
+    });
+
+    async function tick() {
+      try {
+        await Promise.all([loadSystem(), loadRequests()]);
+      } catch (err) {
+        document.getElementById("pulse").style.background = "#ef6b57";
+      }
+    }
+    tick();
+    setInterval(tick, 2000);
+  </script>
+</body>
+</html>

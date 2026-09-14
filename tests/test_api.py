@@ -266,6 +266,9 @@ def test_transcribe_ok(client: TestClient, api_key: str, dummy_transcriber: Magi
     assert body["model"] == "whisper-large-v3-turbo"
     assert "rtf" in body
     dummy_transcriber.transcribe.assert_called()
+    assert response.headers["x-processing-ms"] == str(body["processing_ms"])
+    assert response.headers["x-model"] == "whisper-large-v3-turbo"
+    assert response.headers["x-device"] == "cpu"
 
 
 def test_transcribe_rejects_unsupported_format(client: TestClient, api_key: str) -> None:
@@ -343,6 +346,8 @@ def test_rerank_ok(client: TestClient, api_key: str, dummy_reranker: MagicMock) 
         {"index": 0, "score": 0.0, "document": "doc a"},
     ]
     dummy_reranker.rank.assert_called()
+    assert response.headers["x-processing-ms"] == str(body["processing_ms"])
+    assert response.headers["x-model"] == "BAAI/bge-reranker-v2-m3"
 
 
 def test_rerank_top_k(client: TestClient, api_key: str) -> None:
@@ -441,6 +446,9 @@ def test_embed_ok(client: TestClient, api_key: str, dummy_embedder: MagicMock) -
     assert len(body["embeddings"][0]) == 4
     assert isinstance(body["processing_ms"], int)
     dummy_embedder.encode.assert_called()
+    assert response.headers["x-processing-ms"] == str(body["processing_ms"])
+    assert response.headers["x-model"] == "BAAI/bge-m3"
+    assert response.headers["x-device"] == "cpu"
 
 
 def test_embed_accepts_single_string(client: TestClient, api_key: str) -> None:

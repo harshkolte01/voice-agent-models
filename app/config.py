@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     tts_max_chars: int = 2000
     tts_kokoro_voice: str = "af_heart"
     tts_kokoro_lang: str = "a"
+    stt_ops_token: str = ""
+    stt_ops_store_size: int = 2000
 
 
 @lru_cache

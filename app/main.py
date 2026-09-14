@@ -6,12 +6,13 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi.responses import Response as RawResponse
 
-from app.access_log import AccessLogMiddleware, configure_access_log
+from app.access_log import AccessLogMiddleware, attach_inference_headers, configure_access_log
 from app.auth import require_api_key
 from app.config import get_settings
+from app.dashboard import router as ops_router
 from app.keys import ApiKeyRecord
 from app.embed import Embedder
 from app.rerank import Reranker
@@ -27,6 +28,7 @@ from app.schemas import (
     SpeechRequest,
     TranscriptionResponse,
 )
+from app.request_store import store
 from app.transcribe import Transcriber, public_model_id
 from app.tts import TtsEngine
 
@@ -78,6 +80,7 @@ async def lifespan(app: FastAPI):
 
     disable_broken_torchvision()
     settings = get_settings()
+    store.configure(settings.stt_ops_store_size)
     app.state.transcriber = Transcriber.from_settings(settings)
     app.state.reranker = Reranker.from_settings(settings)
     app.state.embedder = Embedder.from_settings(settings)
@@ -97,6 +100,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.add_middleware(AccessLogMiddleware)
+app.include_router(ops_router)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -152,6 +156,7 @@ def _suffix_for_upload(filename: str | None) -> str:
 
 @app.post("/v1/audio/transcriptions", response_model=TranscriptionResponse)
 async def transcribe_audio(
+    response: Response,
     file: UploadFile = File(...),
     language: str | None = Form(default=None),
     model: str | None = Form(default=None),
@@ -206,6 +211,13 @@ async def transcribe_audio(
     if result.duration > 0:
         rtf = round((processing_ms / 1000.0) / result.duration, 4)
 
+    model_id = result.model or public_model_id(transcriber.model_name)
+    attach_inference_headers(
+        response,
+        processing_ms=processing_ms,
+        model=model_id,
+        device=transcriber.device,
+    )
     return TranscriptionResponse(
         text=result.text,
         language=result.language,
@@ -214,13 +226,14 @@ async def transcribe_audio(
         processing_ms=processing_ms,
         rtf=rtf,
         device=transcriber.device,
-        model=result.model or public_model_id(transcriber.model_name),
+        model=model_id,
     )
 
 
 @app.post("/v1/rerank", response_model=RerankResponse)
 async def rerank_documents(
     body: RerankRequest,
+    response: Response,
     _: ApiKeyRecord = Depends(require_api_key),
 ) -> RerankResponse:
     settings = get_settings()
@@ -235,6 +248,12 @@ async def rerank_documents(
     ranked = await reranker.rank(body.query, body.documents, body.top_k)
     processing_ms = int((time.perf_counter() - started) * 1000)
 
+    attach_inference_headers(
+        response,
+        processing_ms=processing_ms,
+        model=reranker.model_name,
+        device=reranker.device,
+    )
     return RerankResponse(
         results=[
             RerankResult(index=item.index, score=item.score, document=item.document)
@@ -249,6 +268,7 @@ async def rerank_documents(
 @app.post("/v1/embeddings", response_model=EmbedResponse)
 async def embed_texts(
     body: EmbedRequest,
+    response: Response,
     _: ApiKeyRecord = Depends(require_api_key),
 ) -> EmbedResponse:
     settings = get_settings()
@@ -264,6 +284,12 @@ async def embed_texts(
     result = await embedder.encode(texts)
     processing_ms = int((time.perf_counter() - started) * 1000)
 
+    attach_inference_headers(
+        response,
+        processing_ms=processing_ms,
+        model=embedder.model_name,
+        device=embedder.device,
+    )
     return EmbedResponse(
         embeddings=result.embeddings,
         dim=result.dim,
@@ -277,7 +303,7 @@ async def embed_texts(
 async def synthesize_speech(
     body: SpeechRequest,
     _: ApiKeyRecord = Depends(require_api_key),
-) -> Response:
+) -> RawResponse:
     settings = get_settings()
     if len(body.input) > settings.tts_max_chars:
         raise HTTPException(
@@ -303,7 +329,7 @@ async def synthesize_speech(
         ) from exc
     processing_ms = int((time.perf_counter() - started) * 1000)
 
-    return Response(
+    return RawResponse(
         content=result.wav_bytes,
         media_type="audio/wav",
         headers={

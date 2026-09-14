@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.responses import Response
 from starlette.types import ASGIApp
 
 from app.config import get_settings
 from app.keys import find_valid_key
+from app.request_store import RequestEvent, store
 
 IST = ZoneInfo("Asia/Kolkata")
 logger = logging.getLogger("stt.access")
+SKIP_PREFIXES = ("/ops", "/docs", "/redoc")
+SKIP_PATHS = {"/health", "/openapi.json", "/favicon.ico"}
 
 
 def now_ist() -> str:
@@ -54,6 +59,36 @@ def key_label(request: Request) -> str:
     return record.id
 
 
+def should_store(path: str) -> bool:
+    if path in SKIP_PATHS:
+        return False
+    return not path.startswith(SKIP_PREFIXES)
+
+
+def attach_inference_headers(
+    response: Response,
+    *,
+    processing_ms: int,
+    model: str,
+    device: str,
+    speaker: str | None = None,
+) -> None:
+    response.headers["X-Processing-Ms"] = str(processing_ms)
+    response.headers["X-Model"] = model
+    response.headers["X-Device"] = device
+    if speaker:
+        response.headers["X-Speaker"] = speaker
+
+
+def _optional_int(value: str | None) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 def configure_access_log() -> None:
     access = logging.getLogger("uvicorn.access")
     access.handlers.clear()
@@ -78,15 +113,37 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         path = request.url.path
+        key = key_label(request)
+        ip = client_ip(request)
+        country = client_country(request)
         logger.info(
             "%s  key=%s  ip=%s  %s  %s %s  %s  %sms",
             now_ist(),
-            key_label(request),
-            client_ip(request),
-            client_country(request),
+            key,
+            ip,
+            country,
             request.method,
             path,
             response.status_code,
             elapsed_ms,
         )
+        if should_store(path):
+            store.add(
+                RequestEvent(
+                    id=uuid.uuid4().hex[:12],
+                    ts_ist=now_ist(),
+                    key_id=key,
+                    method=request.method,
+                    path=path,
+                    status=response.status_code,
+                    duration_ms=elapsed_ms,
+                    ip=ip,
+                    country=country,
+                    processing_ms=_optional_int(response.headers.get("x-processing-ms")),
+                    model=response.headers.get("x-model"),
+                    device=response.headers.get("x-device"),
+                    speaker=response.headers.get("x-speaker"),
+                    request_bytes=_optional_int(request.headers.get("content-length")),
+                )
+            )
         return response
