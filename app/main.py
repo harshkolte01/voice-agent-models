@@ -15,8 +15,11 @@ from app.config import get_settings
 from app.dashboard import router as ops_router
 from app.keys import ApiKeyRecord
 from app.embed import Embedder
+from app.laya_engine import LayaEngine, PUBLIC_ID as LAYA_PUBLIC_ID
 from app.rerank import Reranker
 from app.schemas import (
+    DecideRequest,
+    DecideResponse,
     EmbedRequest,
     EmbedResponse,
     HealthResponse,
@@ -64,6 +67,13 @@ def _get_tts(app: FastAPI) -> TtsEngine:
     return tts
 
 
+def _get_laya(app: FastAPI) -> LayaEngine:
+    laya = getattr(app.state, "laya", None)
+    if laya is None:
+        raise HTTPException(status_code=503, detail="Laya is not enabled")
+    return laya
+
+
 def _stt_ids(transcriber: Transcriber) -> list[str]:
     listed = getattr(transcriber, "listed_stt_models", None)
     if callable(listed):
@@ -76,9 +86,10 @@ def _stt_ids(transcriber: Transcriber) -> list[str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_access_log()
-    from app.hf_compat import disable_broken_torchvision
+    from app.hf_compat import disable_broken_torchvision, force_hf_hub_copy_cache
 
     disable_broken_torchvision()
+    force_hf_hub_copy_cache()
     settings = get_settings()
     store.configure(settings.stt_ops_store_size)
     app.state.transcriber = Transcriber.from_settings(settings)
@@ -87,16 +98,20 @@ async def lifespan(app: FastAPI):
     app.state.tts = (
         TtsEngine.from_settings(settings) if settings.tts_enabled else None
     )
+    app.state.laya = (
+        LayaEngine.from_settings(settings) if settings.laya_enabled else None
+    )
     yield
     app.state.transcriber = None
     app.state.reranker = None
     app.state.embedder = None
     app.state.tts = None
+    app.state.laya = None
 
 
 app = FastAPI(
     title="STT API",
-    description="Private speech-to-text, TTS, rerank, and embedding API.",
+    description="Private speech-to-text, TTS, rerank, embedding, and decision API.",
     lifespan=lifespan,
 )
 app.add_middleware(AccessLogMiddleware)
@@ -109,6 +124,7 @@ async def health() -> HealthResponse:
     reranker = getattr(app.state, "reranker", None)
     embedder = getattr(app.state, "embedder", None)
     tts = getattr(app.state, "tts", None)
+    laya = getattr(app.state, "laya", None)
     device = transcriber.device if transcriber is not None else "unknown"
     return HealthResponse(
         status="ok",
@@ -116,6 +132,7 @@ async def health() -> HealthResponse:
         reranker_loaded=bool(reranker and reranker.loaded),
         embedder_loaded=bool(embedder and embedder.loaded),
         tts_loaded=bool(tts and tts.loaded),
+        laya_loaded=bool(laya and laya.loaded),
         device=device,
     )
 
@@ -126,6 +143,7 @@ async def list_models(_: ApiKeyRecord = Depends(require_api_key)) -> ModelsRespo
     reranker = _get_reranker(app)
     embedder = _get_embedder(app)
     tts = getattr(app.state, "tts", None)
+    laya = getattr(app.state, "laya", None)
     models = [
         ModelInfo(id=model_id, type="stt")
         for model_id in _stt_ids(transcriber)
@@ -138,6 +156,8 @@ async def list_models(_: ApiKeyRecord = Depends(require_api_key)) -> ModelsRespo
             tts_ids = [tts.public_id]
         for model_id in tts_ids:
             models.append(ModelInfo(id=model_id, type="tts"))
+    if laya is not None:
+        models.append(ModelInfo(id=LAYA_PUBLIC_ID, type="decide"))
     return ModelsResponse(models=models)
 
 
@@ -339,6 +359,47 @@ async def synthesize_speech(
             "X-Speaker": result.speaker,
             "X-Sample-Rate": "24000",
         },
+    )
+
+
+@app.post("/v1/decide", response_model=DecideResponse)
+async def decide(
+    body: DecideRequest,
+    response: Response,
+    _: ApiKeyRecord = Depends(require_api_key),
+) -> DecideResponse:
+    settings = get_settings()
+    if len(body.questions) > settings.laya_max_questions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many questions. Max: {settings.laya_max_questions}",
+        )
+
+    laya = _get_laya(app)
+    questions = {
+        name: question.model_dump(exclude_none=True)
+        for name, question in body.questions.items()
+    }
+    started = time.perf_counter()
+    try:
+        result = await laya.predict(body.state, questions, model=body.model)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    processing_ms = int((time.perf_counter() - started) * 1000)
+
+    attach_inference_headers(
+        response,
+        processing_ms=processing_ms,
+        model=result.model,
+        device=result.device,
+    )
+    return DecideResponse(
+        answers=result.answers,
+        routing=result.routing,
+        checkpoint=result.checkpoint,
+        processing_ms=processing_ms,
+        device=result.device,
+        model=result.model,
     )
 
 

@@ -1,3 +1,5 @@
+from typing import Any, Literal
+
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -7,6 +9,7 @@ class HealthResponse(BaseModel):
     reranker_loaded: bool
     embedder_loaded: bool
     tts_loaded: bool = False
+    laya_loaded: bool = False
     device: str
 
 
@@ -110,3 +113,77 @@ class SpeechRequest(BaseModel):
         if self.voice:
             self.speaker = self.voice
         return self
+
+
+class LayaQuestion(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["choice", "score", "noul"]
+    instructions: str = Field(min_length=1)
+    criteria: dict[str, str] | list[str] | None = None
+
+    @field_validator("instructions")
+    @classmethod
+    def strip_instructions(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("instructions must not be empty")
+        return stripped
+
+    @model_validator(mode="after")
+    def require_criteria_for_typed_questions(self):
+        if self.type in {"choice", "score"}:
+            if self.criteria is None:
+                raise ValueError(f"{self.type} questions require criteria")
+            if isinstance(self.criteria, dict):
+                if not self.criteria:
+                    raise ValueError("criteria must not be empty")
+                for key, value in self.criteria.items():
+                    if not str(key).strip() or not str(value).strip():
+                        raise ValueError("criteria keys and values must not be empty")
+            elif isinstance(self.criteria, list):
+                if not self.criteria:
+                    raise ValueError("criteria must not be empty")
+                for index, item in enumerate(self.criteria):
+                    if not str(item).strip():
+                        raise ValueError(f"criteria[{index}] must not be empty")
+        return self
+
+
+class DecideRequest(BaseModel):
+    state: str | dict[str, Any]
+    questions: dict[str, LayaQuestion] = Field(min_length=1)
+    model: str | None = None
+
+    @field_validator("state")
+    @classmethod
+    def validate_state(cls, value: str | dict[str, Any]) -> str | dict[str, Any]:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                raise ValueError("state must not be empty")
+            return stripped
+        if not value:
+            raise ValueError("state must not be empty")
+        return value
+
+    @field_validator("questions")
+    @classmethod
+    def reject_empty_questions(
+        cls, value: dict[str, LayaQuestion]
+    ) -> dict[str, LayaQuestion]:
+        if not value:
+            raise ValueError("questions must not be empty")
+        for key in value:
+            if not key.strip():
+                raise ValueError("question names must not be empty")
+        return value
+
+
+class DecideResponse(BaseModel):
+    answers: dict[str, Any]
+    routing: dict[str, Any] | None = None
+    checkpoint: str | None = None
+    processing_ms: int
+    device: str
+    model: str

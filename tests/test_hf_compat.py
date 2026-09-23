@@ -32,3 +32,13 @@ def test_disable_broken_torchvision_skips_nms_mismatch() -> None:
     assert import_utils._torchvision_available is False
     import_utils._torchvision_available = True
     hf_compat._patched = False
+
+
+def test_force_hf_hub_copy_cache_disables_symlinks_on_windows() -> None:
+    hf_compat._hf_symlinks_patched = False
+    with patch.object(hf_compat.os, "name", "nt"):
+        hf_compat.force_hf_hub_copy_cache()
+    from huggingface_hub.file_download import are_symlinks_supported
+
+    assert are_symlinks_supported() is False
+    hf_compat._hf_symlinks_patched = False

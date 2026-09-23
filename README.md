@@ -1,12 +1,13 @@
 # Private STT API server
 
-Host-laptop speech-to-text, TTS, rerank, and embedding API. Whisper `large-v3-turbo`, Kokoro-82M, `BAAI/bge-reranker-v2-m3`, and `BAAI/bge-m3` stay on this machine. Clients only need:
+Host-laptop speech-to-text, TTS, rerank, embedding, and Laya decision API. Whisper `large-v3-turbo`, Kokoro-82M, `BAAI/bge-reranker-v2-m3`, `BAAI/bge-m3`, and Laya stay on this machine. Clients only need:
 
 ```env
 STT_API_URL=http://127.0.0.1:8000/v1/audio/transcriptions
 TTS_API_URL=http://127.0.0.1:8000/v1/audio/speech
 RERANK_API_URL=http://127.0.0.1:8000/v1/rerank
 EMBED_API_URL=http://127.0.0.1:8000/v1/embeddings
+DECIDE_API_URL=http://127.0.0.1:8000/v1/decide
 STT_API_KEY=stt_live_...
 ```
 
@@ -87,14 +88,14 @@ Restart the API process, then open:
 
 Log in with `STT_OPS_TOKEN`. Without that env var, `/ops` stays off (404). The board is cookie-gated so the tunnel cannot be scraped by callers who only have `STT_API_KEY`.
 
-First start downloads `large-v3-turbo` via faster-whisper (CTranslate2), plus `BAAI/bge-reranker-v2-m3`, `BAAI/bge-m3`, and Kokoro-82M (`hexgrad/Kokoro-82M`, ~200 MB). All of these stay resident. Kokoro is Apache-2.0.
+First start downloads `large-v3-turbo` via faster-whisper (CTranslate2), plus `BAAI/bge-reranker-v2-m3`, `BAAI/bge-m3`, Kokoro-82M (`hexgrad/Kokoro-82M`, ~200 MB), and Laya (`english` + `multilingual` + `typed-decisions` via `laya.Router`). All of these stay resident. Kokoro and Laya are Apache-2.0. On Windows without Developer Mode, the server forces Hugging Face Hub to copy cache files (no symlinks) so Laya download does not fail with WinError 1314.
 
 ## API
 
 ### `GET /health` (no auth)
 
 ```json
-{ "status": "ok", "model_loaded": true, "reranker_loaded": true, "embedder_loaded": true, "tts_loaded": true, "device": "cuda" }
+{ "status": "ok", "model_loaded": true, "reranker_loaded": true, "embedder_loaded": true, "tts_loaded": true, "laya_loaded": true, "device": "cuda" }
 ```
 
 ### `GET /v1/models`
@@ -107,7 +108,8 @@ Header: `Authorization: Bearer stt_live_...`
     { "id": "whisper-large-v3-turbo", "type": "stt" },
     { "id": "BAAI/bge-reranker-v2-m3", "type": "rerank" },
     { "id": "BAAI/bge-m3", "type": "embedding" },
-    { "id": "kokoro-82m", "type": "tts" }
+    { "id": "kokoro-82m", "type": "tts" },
+    { "id": "laya-router", "type": "decide" }
   ]
 }
 ```
@@ -187,6 +189,57 @@ JSON body:
 
 Vectors are L2-normalized dense embeddings (BGE-M3 CLS pooling). Compare them with cosine similarity.
 
+### `POST /v1/decide`
+
+Header: `Authorization: Bearer stt_live_...`
+
+JSON body — Laya typed decisions (not speech-to-text). Intended for the voice pipeline **router** after STT: pick `direct_tool` / `memory_llm` / `llm` (or similar) with calibrated confidence before RAG or GPT Mini.
+
+Give a `state` plus typed `questions`; Laya returns answers in one forward pass via `laya.Router`. By default this host preloads `english`, `multilingual`, and `typed-decisions`, and uses **`typed-decisions`** as the decide checkpoint (the fine-tune that beats TypeSafe Jev on typed-decision accuracy).
+
+- `state` (required): string or JSON object (transcript, ticket, free text, etc.)
+- `questions` (required): 1 to `LAYA_MAX_QUESTIONS` named questions. Each needs `type` (`choice`, `score`, or `noul`) and `instructions`. `choice` and `score` also need `criteria`
+- `model` (optional): force `english`, `multilingual`, or `typed-decisions`. Omit to use `LAYA_DEFAULT_MODEL` (`typed-decisions`). Pass `auto` for script-based english/multilingual routing instead
+
+Tool-route example (Android assistant after STT):
+
+```json
+{
+  "state": { "transcript": "Set a timer for ten minutes" },
+  "questions": {
+    "route": {
+      "type": "choice",
+      "instructions": "Which path should handle this user turn?",
+      "criteria": {
+        "direct_tool": "clear command that maps to a known tool (timer, call, open app, set reminder)",
+        "memory_llm": "needs personal facts, history, notes, or retrieval",
+        "llm": "general chat or reasoning with no tool and no memory lookup"
+      }
+    },
+    "needs_tool": {
+      "type": "noul",
+      "instructions": "Does the user explicitly need a device or action tool right now?"
+    }
+  }
+}
+```
+
+```json
+{
+  "answers": {
+    "route": { "choice": "direct_tool", "confidence": 0.94 },
+    "needs_tool": { "noul": 0.91 }
+  },
+  "routing": { "model": "typed-decisions", "repo": "...", "reason": "..." },
+  "checkpoint": "typed-decisions",
+  "processing_ms": 38,
+  "device": "cuda",
+  "model": "laya-router"
+}
+```
+
+Response headers: `X-Processing-Ms`, `X-Model`, `X-Device`. Exact answer fields follow Laya’s native shape per question type. Gate on confidence (and `needs_tool`) before committing to a path; escalate to GPT Mini when unsure.
+
 ### `POST /v1/audio/speech`
 
 Header: `Authorization: Bearer stt_live_...`
@@ -227,6 +280,11 @@ curl.exe -H "Authorization: Bearer $env:STT_API_KEY" `
   -H "Content-Type: application/json" `
   -d '{ "input": ["meeting notes", "standup is at 10am"] }' `
   http://127.0.0.1:8000/v1/embeddings
+
+curl.exe -H "Authorization: Bearer $env:STT_API_KEY" `
+  -H "Content-Type: application/json" `
+  -d '{ "state": { "transcript": "Set a timer for ten minutes" }, "questions": { "route": { "type": "choice", "instructions": "Which path?", "criteria": { "direct_tool": "known tool command", "memory_llm": "needs retrieval", "llm": "general chat" } }, "needs_tool": { "type": "noul", "instructions": "Needs a device tool?" } } }' `
+  http://127.0.0.1:8000/v1/decide
 ```
 
 ## Config
@@ -254,6 +312,11 @@ Copied from `.env.example`:
 | `TTS_MAX_CHARS` | `2000` | max TTS input length |
 | `TTS_KOKORO_VOICE` | `af_heart` | default Kokoro voice |
 | `TTS_KOKORO_LANG` | `a` | fallback Kokoro lang code (`a` = American English) |
+| `LAYA_ENABLED` | `true` | expose Laya on `/v1/decide` |
+| `LAYA_DEVICE` | `auto` | PyTorch `cuda` if a GPU is visible, else `cpu` |
+| `LAYA_MAX_QUESTIONS` | `32` | max questions per decide request |
+| `LAYA_PRELOAD` | `english,multilingual,typed-decisions` | comma-separated checkpoints kept resident |
+| `LAYA_DEFAULT_MODEL` | `typed-decisions` | checkpoint used when request omits `model` (`auto` = language router) |
 | `STT_OPS_TOKEN` | empty | operator login for `/ops` (required for Cloudflare) |
 | `STT_OPS_STORE_SIZE` | `2000` | in-memory request history cap |
 
@@ -293,4 +356,4 @@ STT_API_KEY=stt_live_...
 pytest
 ```
 
-API tests mock Whisper, Kokoro, the reranker, and the embedder so they do not need a GPU or model download.
+API tests mock Whisper, Kokoro, the reranker, the embedder, and Laya so they do not need a GPU or model download.

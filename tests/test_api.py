@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.config import get_settings
 from app.keys import create_key, save_keys, load_keys
 from app.embed import EmbeddingResult
+from app.laya_engine import DecideResult
 from app.rerank import RankedDocument
 from app.transcribe import TranscriptionResult
 from app.tts import SpeechResult
@@ -31,6 +32,11 @@ def keys_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("EMBED_DEVICE", "cpu")
     monkeypatch.setenv("EMBED_MAX_TEXTS", "64")
     monkeypatch.setenv("EMBED_MAX_LENGTH", "8192")
+    monkeypatch.setenv("LAYA_ENABLED", "true")
+    monkeypatch.setenv("LAYA_DEVICE", "cpu")
+    monkeypatch.setenv("LAYA_MAX_QUESTIONS", "32")
+    monkeypatch.setenv("LAYA_PRELOAD", "english,multilingual,typed-decisions")
+    monkeypatch.setenv("LAYA_DEFAULT_MODEL", "typed-decisions")
     get_settings.cache_clear()
     yield path
     get_settings.cache_clear()
@@ -143,18 +149,59 @@ def dummy_tts() -> MagicMock:
 
 
 @pytest.fixture
+def dummy_laya() -> MagicMock:
+    dummy = MagicMock()
+    dummy.loaded = True
+    dummy.device = "cpu"
+    dummy.model_name = "laya-router"
+    dummy.public_id = "laya-router"
+    dummy.default_model = "typed-decisions"
+    dummy.preload = ["english", "multilingual", "typed-decisions"]
+
+    async def fake_predict(
+        state: str | dict,
+        questions: dict,
+        model: str | None = None,
+    ):
+        from app.laya_engine import normalize_laya_model
+
+        override = normalize_laya_model(model)
+        if override is None:
+            override = "typed-decisions"
+        return DecideResult(
+            answers={
+                "department": {"choice": "billing", "confidence": 0.94},
+                "churn_risk": {"noul": 0.892},
+            },
+            routing={
+                "model": override,
+                "repo": "convaiinnovations/laya",
+                "reason": "default checkpoint",
+            },
+            model="laya-router",
+            device="cpu",
+            checkpoint=override,
+        )
+
+    dummy.predict.side_effect = fake_predict
+    return dummy
+
+
+@pytest.fixture
 def client(
     keys_file: Path,
     dummy_transcriber: MagicMock,
     dummy_reranker: MagicMock,
     dummy_embedder: MagicMock,
     dummy_tts: MagicMock,
+    dummy_laya: MagicMock,
 ):
     with (
         patch("app.main.Transcriber.from_settings", return_value=dummy_transcriber),
         patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
         patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
         patch("app.main.TtsEngine.from_settings", return_value=dummy_tts),
+        patch("app.main.LayaEngine.from_settings", return_value=dummy_laya),
     ):
         from app.main import app
 
@@ -181,6 +228,7 @@ def test_health_unauthenticated(client: TestClient) -> None:
     assert body["reranker_loaded"] is True
     assert body["embedder_loaded"] is True
     assert body["tts_loaded"] is True
+    assert body["laya_loaded"] is True
     assert body["device"] == "cpu"
 
 
@@ -236,6 +284,7 @@ def test_models_ok(client: TestClient, api_key: str) -> None:
             {"id": "BAAI/bge-reranker-v2-m3", "type": "rerank"},
             {"id": "BAAI/bge-m3", "type": "embedding"},
             {"id": "kokoro-82m", "type": "tts"},
+            {"id": "laya-router", "type": "decide"},
         ]
     }
 
@@ -297,6 +346,7 @@ def test_transcribe_rejects_oversize(
     dummy_reranker: MagicMock,
     dummy_embedder: MagicMock,
     dummy_tts: MagicMock,
+    dummy_laya: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("STT_MAX_UPLOAD_MB", "0")
@@ -308,6 +358,7 @@ def test_transcribe_rejects_oversize(
         patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
         patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
         patch("app.main.TtsEngine.from_settings", return_value=dummy_tts),
+        patch("app.main.LayaEngine.from_settings", return_value=dummy_laya),
     ):
         from app.main import app
 
@@ -400,6 +451,7 @@ def test_rerank_rejects_over_max_docs(
     dummy_reranker: MagicMock,
     dummy_embedder: MagicMock,
     dummy_tts: MagicMock,
+    dummy_laya: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RERANK_MAX_DOCS", "1")
@@ -411,6 +463,7 @@ def test_rerank_rejects_over_max_docs(
         patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
         patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
         patch("app.main.TtsEngine.from_settings", return_value=dummy_tts),
+        patch("app.main.LayaEngine.from_settings", return_value=dummy_laya),
     ):
         from app.main import app
 
@@ -487,6 +540,7 @@ def test_embed_rejects_over_max_texts(
     dummy_reranker: MagicMock,
     dummy_embedder: MagicMock,
     dummy_tts: MagicMock,
+    dummy_laya: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("EMBED_MAX_TEXTS", "1")
@@ -498,6 +552,7 @@ def test_embed_rejects_over_max_texts(
         patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
         patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
         patch("app.main.TtsEngine.from_settings", return_value=dummy_tts),
+        patch("app.main.LayaEngine.from_settings", return_value=dummy_laya),
     ):
         from app.main import app
 
@@ -622,3 +677,136 @@ def test_speech_kokoro_native_voice(
     assert response.status_code == 200
     assert response.headers["x-model"] == "kokoro-82m"
     assert response.headers["x-speaker"] == "am_liam"
+
+
+SAMPLE_DECIDE_BODY = {
+    "state": {"subject": "Duplicate charge", "body": "Please refund."},
+    "questions": {
+        "department": {
+            "type": "choice",
+            "instructions": "Which department?",
+            "criteria": {
+                "billing": "invoices, refunds",
+                "other": "everything else",
+            },
+        },
+        "churn_risk": {
+            "type": "noul",
+            "instructions": "Threaten to cancel?",
+        },
+    },
+}
+
+
+def test_decide_requires_api_key(client: TestClient) -> None:
+    response = client.post("/v1/decide", json=SAMPLE_DECIDE_BODY)
+    assert response.status_code == 401
+
+
+def test_decide_ok(client: TestClient, api_key: str, dummy_laya: MagicMock) -> None:
+    response = client.post(
+        "/v1/decide",
+        headers=auth_header(api_key),
+        json=SAMPLE_DECIDE_BODY,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"] == "laya-router"
+    assert body["device"] == "cpu"
+    assert body["checkpoint"] == "typed-decisions"
+    assert body["answers"]["department"]["choice"] == "billing"
+    assert body["routing"]["model"] == "typed-decisions"
+    assert isinstance(body["processing_ms"], int)
+    dummy_laya.predict.assert_called()
+    assert response.headers["x-model"] == "laya-router"
+    assert response.headers["x-device"] == "cpu"
+    assert response.headers["x-processing-ms"] == str(body["processing_ms"])
+
+
+def test_decide_rejects_empty_questions(client: TestClient, api_key: str) -> None:
+    response = client.post(
+        "/v1/decide",
+        headers=auth_header(api_key),
+        json={"state": "hello", "questions": {}},
+    )
+    assert response.status_code == 422
+
+
+def test_decide_rejects_invalid_question_type(client: TestClient, api_key: str) -> None:
+    response = client.post(
+        "/v1/decide",
+        headers=auth_header(api_key),
+        json={
+            "state": "hello",
+            "questions": {
+                "x": {
+                    "type": "essay",
+                    "instructions": "Write something",
+                }
+            },
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_decide_rejects_choice_without_criteria(
+    client: TestClient, api_key: str
+) -> None:
+    response = client.post(
+        "/v1/decide",
+        headers=auth_header(api_key),
+        json={
+            "state": "hello",
+            "questions": {
+                "department": {
+                    "type": "choice",
+                    "instructions": "Which department?",
+                }
+            },
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_decide_rejects_over_max_questions(
+    keys_file: Path,
+    dummy_transcriber: MagicMock,
+    dummy_reranker: MagicMock,
+    dummy_embedder: MagicMock,
+    dummy_tts: MagicMock,
+    dummy_laya: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LAYA_MAX_QUESTIONS", "1")
+    get_settings.cache_clear()
+    plaintext, _ = create_key(keys_file, name="decide-limit")
+
+    with (
+        patch("app.main.Transcriber.from_settings", return_value=dummy_transcriber),
+        patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
+        patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
+        patch("app.main.TtsEngine.from_settings", return_value=dummy_tts),
+        patch("app.main.LayaEngine.from_settings", return_value=dummy_laya),
+    ):
+        from app.main import app
+
+        with TestClient(app) as test_client:
+            response = test_client.post(
+                "/v1/decide",
+                headers=auth_header(plaintext),
+                json=SAMPLE_DECIDE_BODY,
+            )
+
+    assert response.status_code == 400
+    assert "Too many questions" in response.json()["detail"]
+    dummy_laya.predict.assert_not_called()
+
+
+def test_decide_rejects_unknown_model(client: TestClient, api_key: str) -> None:
+    response = client.post(
+        "/v1/decide",
+        headers=auth_header(api_key),
+        json={**SAMPLE_DECIDE_BODY, "model": "nope"},
+    )
+    assert response.status_code == 400
+    assert "Unsupported Laya model" in response.json()["detail"]

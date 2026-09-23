@@ -18,6 +18,11 @@ from app.keys import (
     slugify,
 )
 from app.embed import resolve_embed_device
+from app.laya_engine import (
+    parse_laya_preload,
+    resolve_default_laya_model,
+    resolve_laya_device,
+)
 from app.rerank import resolve_rerank_device
 from app.transcribe import public_model_id, resolve_compute_type, resolve_device
 
@@ -106,6 +111,30 @@ def test_resolve_embed_device_auto_uses_cuda_when_available() -> None:
     with patch("app.embed.torch_cuda_available", return_value=False):
         assert resolve_embed_device("auto") == "cpu"
     assert resolve_embed_device("cpu") == "cpu"
+
+
+def test_resolve_laya_device_auto_uses_cuda_when_available() -> None:
+    with patch("app.laya_engine.torch_cuda_available", return_value=True):
+        assert resolve_laya_device("auto") == "cuda"
+    with patch("app.laya_engine.torch_cuda_available", return_value=False):
+        assert resolve_laya_device("auto") == "cpu"
+    assert resolve_laya_device("cpu") == "cpu"
+
+
+def test_parse_laya_preload_and_default_model() -> None:
+    assert parse_laya_preload("english, typed-decisions") == [
+        "english",
+        "typed-decisions",
+    ]
+    assert parse_laya_preload(None) == [
+        "english",
+        "multilingual",
+        "typed-decisions",
+    ]
+    assert resolve_default_laya_model(None) == "typed-decisions"
+    assert resolve_default_laya_model("auto") is None
+    with pytest.raises(ValueError):
+        parse_laya_preload("english,nope")
 
 
 def test_resolve_compute_type_auto() -> None:
