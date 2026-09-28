@@ -35,7 +35,6 @@
             <option value="/v1/audio/speech">speech</option>
             <option value="/v1/embeddings">embeddings</option>
             <option value="/v1/rerank">rerank</option>
-            <option value="/v1/decide">decide</option>
             <option value="/v1/models">models</option>
           </select>
           <select id="statusFilter">
@@ -99,19 +98,11 @@
 
     function engineRow(name, info) {
       const on = Boolean(info && info.loaded);
-      const extra = [];
-      if (info && info.default_model) extra.push(`default ${info.default_model}`);
-      if (info && Array.isArray(info.preload) && info.preload.length) {
-        extra.push(`preload ${info.preload.join("+")}`);
-      }
-      const detail = [dash(info && info.model), dash(info && info.device), ...extra]
-        .filter((part) => part && part !== "—")
-        .join(" · ");
       return `<div class="engine">
         <div class="dot ${on ? "on" : "off"}"></div>
         <div>
           <div>${name} · ${on ? "hot" : "cold"}</div>
-          <div class="meta">${detail || "—"}</div>
+          <div class="meta">${dash(info && info.model)} · ${dash(info && info.device)}</div>
         </div>
       </div>`;
     }
@@ -129,7 +120,6 @@
         engineRow("TTS", data.tts),
         engineRow("Embed", data.embed),
         engineRow("Rerank", data.rerank),
-        engineRow("Laya", data.laya),
       ].join("");
       document.getElementById("cpu").textContent =
         data.cpu_percent == null ? "—" : data.cpu_percent.toFixed(0) + "%";

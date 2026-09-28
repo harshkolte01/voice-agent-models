@@ -29,11 +29,6 @@ class Settings(BaseSettings):
     tts_max_chars: int = 2000
     tts_kokoro_voice: str = "af_heart"
     tts_kokoro_lang: str = "a"
-    laya_enabled: bool = True
-    laya_device: str = "auto"
-    laya_max_questions: int = 32
-    laya_preload: str = "english,multilingual,typed-decisions"
-    laya_default_model: str = "typed-decisions"
     stt_ops_token: str = ""
     stt_ops_store_size: int = 2000
 

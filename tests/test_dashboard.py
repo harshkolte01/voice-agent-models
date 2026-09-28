@@ -13,7 +13,6 @@ from app.ops_auth import COOKIE_NAME
 from app.request_store import RequestEvent, store
 from app.system_stats import clear_cache
 from app.embed import EmbeddingResult
-from app.laya_engine import DecideResult
 from app.rerank import RankedDocument
 from app.transcribe import TranscriptionResult
 from app.tts import SpeechResult
@@ -157,27 +156,6 @@ def dummy_tts() -> MagicMock:
     return dummy
 
 
-@pytest.fixture
-def dummy_laya() -> MagicMock:
-    dummy = MagicMock()
-    dummy.loaded = True
-    dummy.device = "cpu"
-    dummy.model_name = "laya-router"
-    dummy.public_id = "laya-router"
-    dummy.default_model = "typed-decisions"
-    dummy.preload = ["english", "multilingual", "typed-decisions"]
-
-    async def fake_predict(*_args, **_kwargs):
-        return DecideResult(
-            answers={"x": {"noul": 0.5}},
-            routing={"model": "typed-decisions"},
-            model="laya-router",
-            device="cpu",
-            checkpoint="typed-decisions",
-        )
-
-    dummy.predict.side_effect = fake_predict
-    return dummy
 
 
 @pytest.fixture
@@ -187,14 +165,12 @@ def client(
     dummy_reranker: MagicMock,
     dummy_embedder: MagicMock,
     dummy_tts: MagicMock,
-    dummy_laya: MagicMock,
 ):
     with (
         patch("app.main.Transcriber.from_settings", return_value=dummy_transcriber),
         patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
         patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
         patch("app.main.TtsEngine.from_settings", return_value=dummy_tts),
-        patch("app.main.LayaEngine.from_settings", return_value=dummy_laya),
     ):
         from app.main import app
 
@@ -209,7 +185,6 @@ def test_ops_disabled_without_token(
     dummy_reranker: MagicMock,
     dummy_embedder: MagicMock,
     dummy_tts: MagicMock,
-    dummy_laya: MagicMock,
 ) -> None:
     keys_path = tmp_path / "keys.json"
     keys_path.write_text('{"keys": []}\n', encoding="utf-8")
@@ -221,7 +196,6 @@ def test_ops_disabled_without_token(
         patch("app.main.Reranker.from_settings", return_value=dummy_reranker),
         patch("app.main.Embedder.from_settings", return_value=dummy_embedder),
         patch("app.main.TtsEngine.from_settings", return_value=dummy_tts),
-        patch("app.main.LayaEngine.from_settings", return_value=dummy_laya),
     ):
         from app.main import app
 
@@ -259,15 +233,6 @@ def test_ops_login_cookie_and_dashboard(client: TestClient) -> None:
     body = system.json()
     assert body["stt"]["loaded"] is True
     assert body["embed"]["device"] == "cpu"
-    assert body["laya"]["loaded"] is True
-    assert body["laya"]["model"] == "laya-router"
-    assert body["laya"]["device"] == "cpu"
-    assert body["laya"]["default_model"] == "typed-decisions"
-    assert body["laya"]["preload"] == [
-        "english",
-        "multilingual",
-        "typed-decisions",
-    ]
 
 
 def test_ops_accepts_bearer_token(client: TestClient) -> None:

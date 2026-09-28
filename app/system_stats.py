@@ -29,7 +29,6 @@ def collect(app: FastAPI) -> dict[str, Any]:
     reranker = getattr(app.state, "reranker", None)
     embedder = getattr(app.state, "embedder", None)
     tts = getattr(app.state, "tts", None)
-    laya = getattr(app.state, "laya", None)
     payload: dict[str, Any] = {
         "status": "ok",
         "stt": {
@@ -51,17 +50,6 @@ def collect(app: FastAPI) -> dict[str, Any]:
             "loaded": bool(tts and getattr(tts, "loaded", False)),
             "device": getattr(tts, "device", None) if tts is not None else None,
             "model": getattr(tts, "public_id", None) if tts is not None else None,
-        },
-        "laya": {
-            "loaded": bool(laya and getattr(laya, "loaded", False)),
-            "device": getattr(laya, "device", None) if laya is not None else None,
-            "model": getattr(laya, "public_id", None) if laya is not None else None,
-            "default_model": getattr(laya, "default_model", None)
-            if laya is not None
-            else None,
-            "preload": list(getattr(laya, "preload", []) or [])
-            if laya is not None
-            else [],
         },
         "cpu_percent": None,
         "ram": None,
