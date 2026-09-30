@@ -19,7 +19,12 @@ from app.keys import (
 )
 from app.embed import resolve_embed_device
 from app.rerank import resolve_rerank_device
-from app.transcribe import public_model_id, resolve_compute_type, resolve_device
+from app.transcribe import (
+    public_model_id,
+    resolve_compute_type,
+    resolve_device,
+    resolve_stt_spec,
+)
 
 
 def test_hash_key_is_sha256() -> None:
@@ -121,6 +126,25 @@ def test_resolve_compute_type_auto() -> None:
 def test_public_model_id() -> None:
     assert public_model_id("large-v3-turbo") == "whisper-large-v3-turbo"
     assert public_model_id("whisper-large-v3-turbo") == "whisper-large-v3-turbo"
+    assert public_model_id("parakeet") == "parakeet-unified-en-0.6b"
+    assert public_model_id("nvidia/parakeet-unified-en-0.6b") == (
+        "parakeet-unified-en-0.6b"
+    )
+
+
+def test_resolve_stt_spec() -> None:
+    whisper = resolve_stt_spec("large-v3-turbo")
+    assert whisper.backend == "whisper"
+    assert whisper.load_id == "large-v3-turbo"
+    assert whisper.public_id == "whisper-large-v3-turbo"
+
+    parakeet = resolve_stt_spec("parakeet")
+    assert parakeet.backend == "parakeet"
+    assert parakeet.load_id == "nvidia/parakeet-unified-en-0.6b"
+    assert parakeet.public_id == "parakeet-unified-en-0.6b"
+
+    with pytest.raises(ValueError, match="Unknown STT_MODEL"):
+        resolve_stt_spec("sravaani-1.0")
 
 
 def test_normalize_stt_model() -> None:
@@ -133,7 +157,54 @@ def test_normalize_stt_model() -> None:
     with pytest.raises(ValueError, match="Unknown STT model"):
         normalize_stt_model("sravaani-1.0", whisper)
     with pytest.raises(ValueError, match="Unknown STT model"):
-        normalize_stt_model("omni-7b", whisper)
+        normalize_stt_model("parakeet", whisper)
+
+    parakeet = "parakeet-unified-en-0.6b"
+    assert normalize_stt_model(None, parakeet) == parakeet
+    assert normalize_stt_model("parakeet", parakeet) == parakeet
+    assert normalize_stt_model("nvidia/parakeet-unified-en-0.6b", parakeet) == parakeet
+    with pytest.raises(ValueError, match="Unknown STT model"):
+        normalize_stt_model("large-v3-turbo", parakeet)
+
+
+def test_parakeet_transcribe_sync_mocked(tmp_path: Path) -> None:
+    import wave
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+
+    from app.transcribe import Transcriber
+
+    wav_path = tmp_path / "clip.wav"
+    with wave.open(str(wav_path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(b"\x00\x00" * 16000)
+
+    dummy_model = MagicMock()
+    dummy_model.transcribe.return_value = [SimpleNamespace(text=" hello world ")]
+
+    with (
+        patch("app.transcribe._load_parakeet_model", return_value=dummy_model),
+        patch("app.transcribe.resolve_device", return_value="cpu"),
+    ):
+        engine = Transcriber(
+            model_name="parakeet",
+            device="cpu",
+            compute_type="auto",
+        )
+
+    assert engine.backend == "parakeet"
+    assert engine.public_id == "parakeet-unified-en-0.6b"
+    assert engine.listed_stt_models() == ["parakeet-unified-en-0.6b"]
+
+    result = engine.transcribe_sync(str(wav_path), language="hi", model=None)
+    assert result.text == "hello world"
+    assert result.language == "en"
+    assert result.language_probability == 1.0
+    assert result.model == "parakeet-unified-en-0.6b"
+    assert abs(result.duration - 1.0) < 0.01
+    dummy_model.transcribe.assert_called_once()
 
 
 def test_normalize_tts_model() -> None:

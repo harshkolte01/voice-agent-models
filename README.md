@@ -1,6 +1,6 @@
 # Private STT API server
 
-Host-laptop speech-to-text, TTS, rerank, and embedding API. Whisper `large-v3-turbo`, Kokoro-82M, `BAAI/bge-reranker-v2-m3`, and `BAAI/bge-m3` stay on this machine. Clients only need:
+Host-laptop speech-to-text, TTS, rerank, and embedding API. STT is either Whisper `large-v3-turbo` or NVIDIA Parakeet Unified EN 0.6B (chosen by `STT_MODEL`), plus Kokoro-82M, `BAAI/bge-reranker-v2-m3`, and `BAAI/bge-m3` on this machine. Clients only need:
 
 ```env
 STT_API_URL=http://127.0.0.1:8000/v1/audio/transcriptions
@@ -13,9 +13,10 @@ STT_API_KEY=stt_live_...
 ## Requirements
 
 - Python 3.11+
-- [ffmpeg](https://ffmpeg.org/download.html) on `PATH` (faster-whisper uses it for mp3/m4a/ogg/webm)
+- [ffmpeg](https://ffmpeg.org/download.html) on `PATH` (Whisper and Parakeet use it for mp3/m4a/ogg/webm; Parakeet also needs it for 16 kHz mono wav)
 - [espeak-ng](https://github.com/espeak-ng/espeak-ng/releases) on `PATH` (Kokoro uses it for phonemes; typical Windows install is `C:\Program Files\eSpeak NG\`)
-- NVIDIA GPU + CUDA for `large-v3-turbo` at useful speed (CPU works, but is slow)
+- NVIDIA GPU + CUDA for Whisper / Parakeet at useful speed (CPU works, but is slow)
+- For Parakeet: `pip install "nemo_toolkit[asr]>=2.7.3"` (see `requirements.txt`)
 - Optional: [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) to expose localhost over HTTPS
 
 ## Setup
@@ -87,7 +88,7 @@ Restart the API process, then open:
 
 Log in with `STT_OPS_TOKEN`. Without that env var, `/ops` stays off (404). The board is cookie-gated so the tunnel cannot be scraped by callers who only have `STT_API_KEY`.
 
-First start downloads `large-v3-turbo` via faster-whisper (CTranslate2), plus `BAAI/bge-reranker-v2-m3`, `BAAI/bge-m3`, and Kokoro-82M (`hexgrad/Kokoro-82M`, ~200 MB). All of these stay resident. Kokoro is Apache-2.0. On Windows without Developer Mode, the server forces Hugging Face Hub to copy cache files (no symlinks) to avoid WinError 1314.
+First start loads the STT engine chosen by `STT_MODEL` (`large-v3-turbo` via faster-whisper / CTranslate2, or `parakeet` via NeMo `nvidia/parakeet-unified-en-0.6b`), plus `BAAI/bge-reranker-v2-m3`, `BAAI/bge-m3`, and Kokoro-82M (`hexgrad/Kokoro-82M`, ~200 MB). Only one STT backend is resident. Kokoro is Apache-2.0; Parakeet is under the NVIDIA Open Model License. On Windows without Developer Mode, the server forces Hugging Face Hub to copy cache files (no symlinks) to avoid WinError 1314.
 
 ## API
 
@@ -119,8 +120,8 @@ Header: `Authorization: Bearer stt_live_...`
 `multipart/form-data`:
 
 - `file` (required): wav, mp3, m4a, ogg, flac, or webm (max 25 MB)
-- `language` (optional): e.g. `en` or `hi`
-- `model` (optional): `whisper-large-v3-turbo` (default)
+- `language` (optional): e.g. `en` or `hi` (Whisper). Parakeet is English-only and always returns `en`
+- `model` (optional): must match the loaded STT public id (`whisper-large-v3-turbo` or `parakeet-unified-en-0.6b`)
 
 ```json
 {
@@ -140,9 +141,11 @@ Timing fields:
 - `processing_ms` — server inference time (not Cloudflare network RTT)
 - `duration` — audio length in seconds
 - `rtf` — real-time factor (`processing_seconds / duration`). Below 1.0 means faster than real time
-- `language_probability` — Whisper language-detection confidence (0–1)
+- `language_probability` — Whisper language-detection confidence (0–1); Parakeet returns `1.0`
 
 Total client latency is still measured on their side (`time around requests.post`), because that includes upload + tunnel + download.
+
+Set `STT_MODEL=parakeet` in `.env` and restart to load Parakeet instead of Whisper. `/v1/models` then lists `parakeet-unified-en-0.6b`.
 
 ### `POST /v1/rerank`
 
@@ -235,9 +238,9 @@ Copied from `.env.example`:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `STT_MODEL` | `large-v3-turbo` | faster-whisper model name |
+| `STT_MODEL` | `large-v3-turbo` | STT backend: `large-v3-turbo` (Whisper) or `parakeet` (NeMo Parakeet Unified EN 0.6B). Only one loads |
 | `STT_DEVICE` | `auto` | `cuda` if a GPU is visible, else `cpu` |
-| `STT_COMPUTE_TYPE` | `auto` | `float16` on CUDA, `int8` on CPU |
+| `STT_COMPUTE_TYPE` | `auto` | Whisper only: `float16` on CUDA, `int8` on CPU (ignored for Parakeet) |
 | `STT_KEYS_FILE` | `keys.json` | hashed key store (gitignored) |
 | `STT_MAX_UPLOAD_MB` | `25` | upload size limit |
 | `STT_HOST` | `127.0.0.1` | bind address |
