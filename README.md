@@ -22,7 +22,7 @@ STT_API_KEY=stt_live_...
 ## Setup
 
 ```powershell
-cd C:\Coding\stt-model
+cd F:\stt-model
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -31,6 +31,27 @@ copy .env.example .env
 ```
 
 `pip install torch` from PyPI is CPU-only. The second command installs matching CUDA 12.8 wheels (`torch`, `torchvision`, `torchaudio`) so rerank, embeddings, and Kokoro can use the GPU. Those three packages must come from the same index; a mismatched `torchvision` crashes Transformers with `operator torchvision::nms does not exist`. Whisper uses CTranslate2 and does not depend on that Torch build.
+
+### Choose Whisper or Parakeet
+
+Only one STT engine loads. Set `STT_MODEL` in `.env`, then **restart** uvicorn:
+
+```env
+# Whisper (faster-whisper large-v3-turbo) — default in .env.example
+STT_MODEL=large-v3-turbo
+
+# NVIDIA Parakeet Unified EN 0.6B (NeMo) — English only, typically faster on long audio
+STT_MODEL=parakeet
+```
+
+Accepted aliases:
+
+| Backend | `STT_MODEL` values | Public id in `/v1/models` |
+| --- | --- | --- |
+| Whisper | `whisper`, `large-v3-turbo`, `whisper-large-v3-turbo` | `whisper-large-v3-turbo` |
+| Parakeet | `parakeet`, `parakeet-unified-en-0.6b`, `nvidia/parakeet-unified-en-0.6b` | `parakeet-unified-en-0.6b` |
+
+Parakeet needs ffmpeg on `PATH` (converts uploads to 16 kHz mono wav) and `nemo_toolkit[asr]` from `requirements.txt`. On this host, Parakeet was ~3–4× faster than Whisper on 1–5 minute clips with similar keyword accuracy on clean English TTS.
 
 ## Generate an API key
 
@@ -113,6 +134,8 @@ Header: `Authorization: Bearer stt_live_...`
 }
 ```
 
+With `STT_MODEL=parakeet`, the STT entry is `{ "id": "parakeet-unified-en-0.6b", "type": "stt" }` instead.
+
 ### `POST /v1/audio/transcriptions`
 
 Header: `Authorization: Bearer stt_live_...`
@@ -145,7 +168,7 @@ Timing fields:
 
 Total client latency is still measured on their side (`time around requests.post`), because that includes upload + tunnel + download.
 
-Set `STT_MODEL=parakeet` in `.env` and restart to load Parakeet instead of Whisper. `/v1/models` then lists `parakeet-unified-en-0.6b`.
+To switch engines, see [Choose Whisper or Parakeet](#choose-whisper-or-parakeet).
 
 ### `POST /v1/rerank`
 
@@ -238,7 +261,7 @@ Copied from `.env.example`:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `STT_MODEL` | `large-v3-turbo` | STT backend: `large-v3-turbo` (Whisper) or `parakeet` (NeMo Parakeet Unified EN 0.6B). Only one loads |
+| `STT_MODEL` | `large-v3-turbo` | STT backend at startup: Whisper (`large-v3-turbo` / `whisper` / `whisper-large-v3-turbo`) or Parakeet (`parakeet` / `parakeet-unified-en-0.6b` / `nvidia/parakeet-unified-en-0.6b`). Restart required to switch |
 | `STT_DEVICE` | `auto` | `cuda` if a GPU is visible, else `cpu` |
 | `STT_COMPUTE_TYPE` | `auto` | Whisper only: `float16` on CUDA, `int8` on CPU (ignored for Parakeet) |
 | `STT_KEYS_FILE` | `keys.json` | hashed key store (gitignored) |
@@ -296,4 +319,4 @@ STT_API_KEY=stt_live_...
 pytest
 ```
 
-API tests mock Whisper, Kokoro, the reranker, and the embedder so they do not need a GPU or model download.
+API tests mock Whisper / Parakeet, Kokoro, the reranker, and the embedder so they do not need a GPU or model download.

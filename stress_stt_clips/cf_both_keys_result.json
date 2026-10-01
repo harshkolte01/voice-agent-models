@@ -1,0 +1,107 @@
+{
+  "url": "https://mls-airplane-percentage-sending.trycloudflare.com",
+  "health": {
+    "status": "ok",
+    "model_loaded": true,
+    "reranker_loaded": true,
+    "embedder_loaded": true,
+    "tts_loaded": true,
+    "device": "cuda"
+  },
+  "results": [
+    {
+      "key": "Harsh",
+      "models_status": 200,
+      "models": {
+        "models": [
+          {
+            "id": "whisper-large-v3-turbo",
+            "type": "stt"
+          },
+          {
+            "id": "BAAI/bge-reranker-v2-m3",
+            "type": "rerank"
+          },
+          {
+            "id": "BAAI/bge-m3",
+            "type": "embedding"
+          },
+          {
+            "id": "kokoro-82m",
+            "type": "tts"
+          }
+        ]
+      },
+      "transcribe": {
+        "ok": true,
+        "status": 200,
+        "client_ms": 1262.1,
+        "processing_ms": 1083,
+        "duration": 15.0,
+        "rtf": 0.0722,
+        "device": "cuda",
+        "model": "whisper-large-v3-turbo",
+        "language": "en",
+        "keyword_hit_rate": 0.889,
+        "keywords_found": [
+          "quarterly",
+          "meeting",
+          "conference",
+          "budget",
+          "feedback",
+          "roadmap",
+          "hiring",
+          "engineering"
+        ],
+        "text_preview": "The quarterly planning meeting starts at 10 in the morning in Conference Room 4. Please bring the budget spreadsheet, the customer feedback notes, and the product roadmap. After lu"
+      }
+    },
+    {
+      "key": "Bhoomi",
+      "models_status": 200,
+      "models": {
+        "models": [
+          {
+            "id": "whisper-large-v3-turbo",
+            "type": "stt"
+          },
+          {
+            "id": "BAAI/bge-reranker-v2-m3",
+            "type": "rerank"
+          },
+          {
+            "id": "BAAI/bge-m3",
+            "type": "embedding"
+          },
+          {
+            "id": "kokoro-82m",
+            "type": "tts"
+          }
+        ]
+      },
+      "transcribe": {
+        "ok": true,
+        "status": 200,
+        "client_ms": 1457.3,
+        "processing_ms": 868,
+        "duration": 15.0,
+        "rtf": 0.0579,
+        "device": "cuda",
+        "model": "whisper-large-v3-turbo",
+        "language": "en",
+        "keyword_hit_rate": 0.889,
+        "keywords_found": [
+          "quarterly",
+          "meeting",
+          "conference",
+          "budget",
+          "feedback",
+          "roadmap",
+          "hiring",
+          "engineering"
+        ],
+        "text_preview": "The quarterly planning meeting starts at 10 in the morning in Conference Room 4. Please bring the budget spreadsheet, the customer feedback notes, and the product roadmap. After lu"
+      }
+    }
+  ]
+}
