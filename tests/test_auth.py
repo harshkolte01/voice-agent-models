@@ -95,6 +95,11 @@ def test_resolve_device_auto_uses_cuda_when_available() -> None:
     with patch("app.transcribe.cuda_available", return_value=False):
         assert resolve_device("auto") == "cpu"
     assert resolve_device("cpu") == "cpu"
+    with patch("app.transcribe.torch_cuda_available", return_value=True):
+        assert resolve_device("auto", backend="phonon") == "cuda"
+    with patch("app.transcribe.torch_cuda_available", return_value=False):
+        assert resolve_device("auto", backend="phonon") == "cpu"
+    assert resolve_device("cuda", backend="phonon") == "cuda"
 
 
 def test_resolve_rerank_device_auto_uses_cuda_when_available() -> None:
@@ -130,6 +135,9 @@ def test_public_model_id() -> None:
     assert public_model_id("nvidia/parakeet-unified-en-0.6b") == (
         "parakeet-unified-en-0.6b"
     )
+    assert public_model_id("phonon-2") == "phonon-2"
+    assert public_model_id("phonon") == "phonon-2"
+    assert public_model_id("FermionResearch/Phonon-2") == "phonon-2"
 
 
 def test_resolve_stt_spec() -> None:
@@ -142,6 +150,11 @@ def test_resolve_stt_spec() -> None:
     assert parakeet.backend == "parakeet"
     assert parakeet.load_id == "nvidia/parakeet-unified-en-0.6b"
     assert parakeet.public_id == "parakeet-unified-en-0.6b"
+
+    phonon = resolve_stt_spec("phonon-2")
+    assert phonon.backend == "phonon"
+    assert phonon.load_id == "FermionResearch/Phonon-2"
+    assert phonon.public_id == "phonon-2"
 
     with pytest.raises(ValueError, match="Unknown STT_MODEL"):
         resolve_stt_spec("sravaani-1.0")
@@ -158,6 +171,8 @@ def test_normalize_stt_model() -> None:
         normalize_stt_model("sravaani-1.0", whisper)
     with pytest.raises(ValueError, match="Unknown STT model"):
         normalize_stt_model("parakeet", whisper)
+    with pytest.raises(ValueError, match="Unknown STT model"):
+        normalize_stt_model("phonon-2", whisper)
 
     parakeet = "parakeet-unified-en-0.6b"
     assert normalize_stt_model(None, parakeet) == parakeet
@@ -165,6 +180,15 @@ def test_normalize_stt_model() -> None:
     assert normalize_stt_model("nvidia/parakeet-unified-en-0.6b", parakeet) == parakeet
     with pytest.raises(ValueError, match="Unknown STT model"):
         normalize_stt_model("large-v3-turbo", parakeet)
+    with pytest.raises(ValueError, match="Unknown STT model"):
+        normalize_stt_model("phonon-2", parakeet)
+
+    phonon = "phonon-2"
+    assert normalize_stt_model(None, phonon) == phonon
+    assert normalize_stt_model("phonon", phonon) == phonon
+    assert normalize_stt_model("FermionResearch/Phonon-2", phonon) == phonon
+    with pytest.raises(ValueError, match="Unknown STT model"):
+        normalize_stt_model("parakeet", phonon)
 
 
 def test_parakeet_transcribe_sync_mocked(tmp_path: Path) -> None:
@@ -203,6 +227,45 @@ def test_parakeet_transcribe_sync_mocked(tmp_path: Path) -> None:
     assert result.language == "en"
     assert result.language_probability == 1.0
     assert result.model == "parakeet-unified-en-0.6b"
+    assert abs(result.duration - 1.0) < 0.01
+    dummy_model.transcribe.assert_called_once()
+
+
+def test_phonon_transcribe_sync_mocked(tmp_path: Path) -> None:
+    import wave
+    from unittest.mock import MagicMock, patch
+
+    from app.transcribe import Transcriber
+
+    wav_path = tmp_path / "clip.wav"
+    with wave.open(str(wav_path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(b"\x00\x00" * 16000)
+
+    dummy_model = MagicMock()
+    dummy_model.transcribe.return_value = ("hello phonon at four p.m.", 0.12, 1.0)
+
+    with (
+        patch("app.transcribe._load_phonon_model", return_value=dummy_model),
+        patch("app.transcribe.resolve_device", return_value="cpu"),
+    ):
+        engine = Transcriber(
+            model_name="phonon-2",
+            device="cpu",
+            compute_type="auto",
+        )
+
+    assert engine.backend == "phonon"
+    assert engine.public_id == "phonon-2"
+    assert engine.listed_stt_models() == ["phonon-2"]
+
+    result = engine.transcribe_sync(str(wav_path), language="hi", model=None)
+    assert result.text == "hello phonon at 4 PM"
+    assert result.language == "en"
+    assert result.language_probability == 1.0
+    assert result.model == "phonon-2"
     assert abs(result.duration - 1.0) < 0.01
     dummy_model.transcribe.assert_called_once()
 

@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from urllib import error, request
 
-BASE = "https://mls-airplane-percentage-sending.trycloudflare.com"
+BASE = "https://viewing-efforts-interview-gonna.trycloudflare.com"
 AUDIO = Path("stress_stt_clips/base_script_16k.wav")
 KEYWORDS = [
     "quarterly",

@@ -34,7 +34,8 @@ def collect(app: FastAPI) -> dict[str, Any]:
         "stt": {
             "loaded": bool(transcriber and transcriber.loaded),
             "device": getattr(transcriber, "device", "unknown"),
-            "model": getattr(transcriber, "model_name", None),
+            "model": getattr(transcriber, "public_id", None)
+            or getattr(transcriber, "model_name", None),
         },
         "rerank": {
             "loaded": bool(reranker and reranker.loaded),

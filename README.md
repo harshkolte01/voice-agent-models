@@ -1,6 +1,6 @@
 # Private STT API server
 
-Host-laptop speech-to-text, TTS, rerank, and embedding API. STT is either Whisper `large-v3-turbo` or NVIDIA Parakeet Unified EN 0.6B (chosen by `STT_MODEL`), plus Kokoro-82M, `BAAI/bge-reranker-v2-m3`, and `BAAI/bge-m3` on this machine. Clients only need:
+Host-laptop speech-to-text, TTS, rerank, and embedding API. STT is Whisper `large-v3-turbo`, NVIDIA Parakeet Unified EN 0.6B, or official Fermion Phonon-2 (chosen by `STT_MODEL`), plus Kokoro-82M, `BAAI/bge-reranker-v2-m3`, and `BAAI/bge-m3` on this machine. Clients only need:
 
 ```env
 STT_API_URL=http://127.0.0.1:8000/v1/audio/transcriptions
@@ -13,10 +13,11 @@ STT_API_KEY=stt_live_...
 ## Requirements
 
 - Python 3.11+
-- [ffmpeg](https://ffmpeg.org/download.html) on `PATH` (Whisper and Parakeet use it for mp3/m4a/ogg/webm; Parakeet also needs it for 16 kHz mono wav)
+- [ffmpeg](https://ffmpeg.org/download.html) on `PATH` (Whisper, Parakeet, and Phonon-2 use it for mp3/m4a/ogg/webm; Parakeet and Phonon-2 also need 16 kHz mono wav)
 - [espeak-ng](https://github.com/espeak-ng/espeak-ng/releases) on `PATH` (Kokoro uses it for phonemes; typical Windows install is `C:\Program Files\eSpeak NG\`)
-- NVIDIA GPU + CUDA for Whisper / Parakeet at useful speed (CPU works, but is slow)
+- NVIDIA GPU + CUDA for Whisper / Parakeet / Phonon-2 at useful speed (CPU works, but is slow). Official `fermion-research` pip is a CPU engine; this server relocates Phonon-2's dense torch graph onto CUDA when `STT_DEVICE=auto|cuda`
 - For Parakeet: `pip install "nemo_toolkit[asr]>=2.7.3"` (see `requirements.txt`)
+- For Phonon-2: `pip install fermion-research --no-deps` then `pip install soundfile scipy zstandard` (keep transformers 4.x for Kokoro/BGE)
 - Optional: [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) to expose localhost over HTTPS
 
 ## Setup
@@ -27,12 +28,14 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install fermion-research --no-deps
+pip install soundfile scipy zstandard
 copy .env.example .env
 ```
 
 `pip install torch` from PyPI is CPU-only. The second command installs matching CUDA 12.8 wheels (`torch`, `torchvision`, `torchaudio`) so rerank, embeddings, and Kokoro can use the GPU. Those three packages must come from the same index; a mismatched `torchvision` crashes Transformers with `operator torchvision::nms does not exist`. Whisper uses CTranslate2 and does not depend on that Torch build.
 
-### Choose Whisper or Parakeet
+### Choose Whisper, Parakeet, or Phonon-2
 
 Only one STT engine loads. Set `STT_MODEL` in `.env`, then **restart** uvicorn:
 
@@ -42,6 +45,9 @@ STT_MODEL=large-v3-turbo
 
 # NVIDIA Parakeet Unified EN 0.6B (NeMo) — English only, typically faster on long audio
 STT_MODEL=parakeet
+
+# Official Fermion Phonon-2 (FermionResearch/Phonon-2 via fermion-research) — English only
+STT_MODEL=phonon-2
 ```
 
 Accepted aliases:
@@ -50,8 +56,11 @@ Accepted aliases:
 | --- | --- | --- |
 | Whisper | `whisper`, `large-v3-turbo`, `whisper-large-v3-turbo` | `whisper-large-v3-turbo` |
 | Parakeet | `parakeet`, `parakeet-unified-en-0.6b`, `nvidia/parakeet-unified-en-0.6b` | `parakeet-unified-en-0.6b` |
+| Phonon-2 | `phonon`, `phonon-2`, `phonon2`, `FermionResearch/Phonon-2` | `phonon-2` |
 
 Parakeet needs ffmpeg on `PATH` (converts uploads to 16 kHz mono wav) and `nemo_toolkit[asr]` from `requirements.txt`. On this host, Parakeet was ~3–4× faster than Whisper on 1–5 minute clips with similar keyword accuracy on clean English TTS.
+
+Phonon-2 loads the **official** 164 MB `FermionResearch/Phonon-2` weights (CC-BY-4.0), not a community export. Long files are windowed inside the Fermion engine (~35 s). On this host, dense fp32 weights are moved onto **CUDA** (Fermion's pip package itself is CPU-only; NVIDIA's official CUDA image is Docker).
 
 ## Generate an API key
 
@@ -109,7 +118,7 @@ Restart the API process, then open:
 
 Log in with `STT_OPS_TOKEN`. Without that env var, `/ops` stays off (404). The board is cookie-gated so the tunnel cannot be scraped by callers who only have `STT_API_KEY`.
 
-First start loads the STT engine chosen by `STT_MODEL` (`large-v3-turbo` via faster-whisper / CTranslate2, or `parakeet` via NeMo `nvidia/parakeet-unified-en-0.6b`), plus `BAAI/bge-reranker-v2-m3`, `BAAI/bge-m3`, and Kokoro-82M (`hexgrad/Kokoro-82M`, ~200 MB). Only one STT backend is resident. Kokoro is Apache-2.0; Parakeet is under the NVIDIA Open Model License. On Windows without Developer Mode, the server forces Hugging Face Hub to copy cache files (no symlinks) to avoid WinError 1314.
+First start loads the STT engine chosen by `STT_MODEL` (`large-v3-turbo` via faster-whisper / CTranslate2, `parakeet` via NeMo `nvidia/parakeet-unified-en-0.6b`, or `phonon-2` via official `FermionResearch/Phonon-2`), plus `BAAI/bge-reranker-v2-m3`, `BAAI/bge-m3`, and Kokoro-82M (`hexgrad/Kokoro-82M`, ~200 MB). Only one STT backend is resident. Kokoro is Apache-2.0; Parakeet is under the NVIDIA Open Model License; Phonon-2 weights are CC-BY-4.0. On Windows without Developer Mode, the server forces Hugging Face Hub to copy cache files (no symlinks) to avoid WinError 1314.
 
 ## API
 
@@ -134,7 +143,7 @@ Header: `Authorization: Bearer stt_live_...`
 }
 ```
 
-With `STT_MODEL=parakeet`, the STT entry is `{ "id": "parakeet-unified-en-0.6b", "type": "stt" }` instead.
+With `STT_MODEL=parakeet`, the STT entry is `{ "id": "parakeet-unified-en-0.6b", "type": "stt" }`. With `STT_MODEL=phonon-2`, it is `{ "id": "phonon-2", "type": "stt" }`.
 
 ### `POST /v1/audio/transcriptions`
 
@@ -143,8 +152,10 @@ Header: `Authorization: Bearer stt_live_...`
 `multipart/form-data`:
 
 - `file` (required): wav, mp3, m4a, ogg, flac, or webm (max 25 MB)
-- `language` (optional): e.g. `en` or `hi` (Whisper). Parakeet is English-only and always returns `en`
-- `model` (optional): must match the loaded STT public id (`whisper-large-v3-turbo` or `parakeet-unified-en-0.6b`)
+- `language` (optional): e.g. `en` or `hi` (Whisper). Parakeet and Phonon-2 are English-only and always return `en`
+- `model` (optional): must match the loaded STT public id (`whisper-large-v3-turbo`, `parakeet-unified-en-0.6b`, or `phonon-2`)
+
+Returned `text` is normalized for all STT engines: dotted `a.m.`/`p.m.` become `AM`/`PM` (so naive sentence splitters do not cut `four p.m.`), spoken hours before AM/PM become digits (`four p.m.` → `4 PM`), and letter/digit gluing like `at10` is spaced.
 
 ```json
 {
@@ -164,11 +175,11 @@ Timing fields:
 - `processing_ms` — server inference time (not Cloudflare network RTT)
 - `duration` — audio length in seconds
 - `rtf` — real-time factor (`processing_seconds / duration`). Below 1.0 means faster than real time
-- `language_probability` — Whisper language-detection confidence (0–1); Parakeet returns `1.0`
+- `language_probability` — Whisper language-detection confidence (0–1); Parakeet and Phonon-2 return `1.0`
 
 Total client latency is still measured on their side (`time around requests.post`), because that includes upload + tunnel + download.
 
-To switch engines, see [Choose Whisper or Parakeet](#choose-whisper-or-parakeet).
+To switch engines, see [Choose Whisper, Parakeet, or Phonon-2](#choose-whisper-parakeet-or-phonon-2).
 
 ### `POST /v1/rerank`
 
@@ -261,9 +272,9 @@ Copied from `.env.example`:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `STT_MODEL` | `large-v3-turbo` | STT backend at startup: Whisper (`large-v3-turbo` / `whisper` / `whisper-large-v3-turbo`) or Parakeet (`parakeet` / `parakeet-unified-en-0.6b` / `nvidia/parakeet-unified-en-0.6b`). Restart required to switch |
+| `STT_MODEL` | `large-v3-turbo` | STT backend at startup: Whisper (`large-v3-turbo` / `whisper` / `whisper-large-v3-turbo`), Parakeet (`parakeet` / `parakeet-unified-en-0.6b` / `nvidia/parakeet-unified-en-0.6b`), or official Phonon-2 (`phonon-2` / `phonon` / `FermionResearch/Phonon-2`). Restart required to switch |
 | `STT_DEVICE` | `auto` | `cuda` if a GPU is visible, else `cpu` |
-| `STT_COMPUTE_TYPE` | `auto` | Whisper only: `float16` on CUDA, `int8` on CPU (ignored for Parakeet) |
+| `STT_COMPUTE_TYPE` | `auto` | Whisper only: `float16` on CUDA, `int8` on CPU (ignored for Parakeet and Phonon-2) |
 | `STT_KEYS_FILE` | `keys.json` | hashed key store (gitignored) |
 | `STT_MAX_UPLOAD_MB` | `25` | upload size limit |
 | `STT_HOST` | `127.0.0.1` | bind address |
@@ -319,4 +330,4 @@ STT_API_KEY=stt_live_...
 pytest
 ```
 
-API tests mock Whisper / Parakeet, Kokoro, the reranker, and the embedder so they do not need a GPU or model download.
+API tests mock Whisper / Parakeet / Phonon-2, Kokoro, the reranker, and the embedder so they do not need a GPU or model download.

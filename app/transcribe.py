@@ -10,11 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import Settings
+from app.stt_text import normalize_stt_text
 
 WHISPER_PUBLIC_ID = "whisper-large-v3-turbo"
 WHISPER_LOAD_ID = "large-v3-turbo"
 PARAKEET_PUBLIC_ID = "parakeet-unified-en-0.6b"
 PARAKEET_LOAD_ID = "nvidia/parakeet-unified-en-0.6b"
+PHONON_PUBLIC_ID = "phonon-2"
+PHONON_LOAD_ID = "FermionResearch/Phonon-2"
 
 WHISPER_ALIASES = frozenset(
     {
@@ -30,11 +33,19 @@ PARAKEET_ALIASES = frozenset(
         "nvidia/parakeet-unified-en-0.6b",
     }
 )
+PHONON_ALIASES = frozenset(
+    {
+        "phonon",
+        "phonon-2",
+        "phonon2",
+        "fermionresearch/phonon-2",
+    }
+)
 
 
 @dataclass(frozen=True)
 class SttSpec:
-    backend: str  # "whisper" | "parakeet"
+    backend: str  # "whisper" | "parakeet" | "phonon"
     load_id: str
     public_id: str
 
@@ -64,9 +75,16 @@ def resolve_stt_spec(model_name: str) -> SttSpec:
             load_id=PARAKEET_LOAD_ID,
             public_id=PARAKEET_PUBLIC_ID,
         )
+    if key in PHONON_ALIASES:
+        return SttSpec(
+            backend="phonon",
+            load_id=PHONON_LOAD_ID,
+            public_id=PHONON_PUBLIC_ID,
+        )
     raise ValueError(
         f"Unknown STT_MODEL '{model_name}'. "
-        f"Use 'large-v3-turbo' (Whisper) or 'parakeet' (Parakeet Unified EN 0.6B)."
+        f"Use 'large-v3-turbo' (Whisper), 'parakeet' (Parakeet Unified EN 0.6B), "
+        f"or 'phonon-2' (Fermion Phonon-2)."
     )
 
 
@@ -111,7 +129,7 @@ def torch_cuda_available() -> bool:
 def resolve_device(device: str, backend: str = "whisper") -> str:
     requested = device.strip().lower()
     if requested == "auto":
-        if backend == "parakeet":
+        if backend in {"parakeet", "phonon"}:
             return "cuda" if torch_cuda_available() else "cpu"
         return "cuda" if cuda_available() else "cpu"
     if requested not in {"cuda", "cpu"}:
@@ -130,6 +148,134 @@ def _load_whisper_model(model_name: str, device: str, compute_type: str):
     from faster_whisper import WhisperModel
 
     return WhisperModel(model_name, device=device, compute_type=compute_type)
+
+
+def _bind_phonon_cuda(speech):
+    """Move official Phonon-2 dense torch graph onto CUDA.
+
+    Fermion's Windows/Linux pip engine is CPU (packed C kernels). We load
+    fp32 weights and run the same ParakeetForTDT decode on GPU.
+    """
+    import types
+
+    import numpy as np
+    import torch
+    from fermion._speech.engine_phonon2_cpu import (
+        HOP,
+        LOG_GUARD,
+        N_FFT,
+        PREEMPH,
+        WIN,
+    )
+
+    speech._cenc = None
+    speech._ctdt = None
+    speech._bf16 = False
+    speech.model = speech.model.to("cuda")
+    speech.model.eval()
+    speech._window = speech._window.to("cuda")
+    speech._melf = speech._melf.to("cuda")
+    device = torch.device("cuda")
+
+    def _log_mel(self, wave):
+        x = torch.as_tensor(np.asarray(wave, dtype=np.float32), device=device)[None]
+        x = torch.cat([x[:, :1], x[:, 1:] - PREEMPH * x[:, :-1]], dim=1)
+        st = torch.stft(
+            x,
+            N_FFT,
+            hop_length=HOP,
+            win_length=WIN,
+            window=self._window,
+            return_complex=True,
+            pad_mode="constant",
+        )
+        mag = torch.view_as_real(st)
+        mag = torch.sqrt(mag.pow(2).sum(-1)).pow(2)
+        mel = torch.log(self._melf @ mag + LOG_GUARD).permute(0, 2, 1)
+        n = mel.shape[1]
+        mean = mel.mean(1, keepdim=True)
+        var = ((mel - mean) ** 2).sum(1) / (n - 1)
+        mel = (mel - mean) / (torch.sqrt(var).unsqueeze(1) + 1e-5)
+        return mel, torch.ones((1, n), dtype=torch.long, device=device)
+
+    def _decode_single(self, audio, repetition_penalty: float):
+        m = self.model
+        cfg = m.config
+        blank = cfg.blank_token_id
+        vocab_size = cfg.vocab_size
+        with torch.inference_mode():
+            feats, am = self._log_mel(audio)
+            enc = m.encoder(input_features=feats, attention_mask=am).last_hidden_state
+            t_len = int(m._get_subsampling_output_length(am.sum(-1))[0])
+            encp = m.encoder_projector(enc)[0]
+            step = 0
+            last = blank
+            ids: list[int] = []
+            frames: list[int] = []
+            durs: list[int] = []
+            nsym = 0
+            it = 0
+            h = torch.zeros(
+                m.decoder.lstm.num_layers,
+                1,
+                m.decoder.lstm.hidden_size,
+                device=device,
+            )
+            c = torch.zeros_like(h)
+            while step < t_len and it < self._max_sym * t_len + 16:
+                emb = m.decoder.embedding(torch.tensor([[last]], device=device))
+                out, (h2, c2) = m.decoder.lstm(emb, (h, c))
+                dec = m.decoder.decoder_projector(out[0])
+                logits = m.joint.head(m.joint.activation(encp[step][None] + dec))[0]
+                tok = int(logits[:vocab_size].argmax())
+                dur = int(self._durations[int(logits[vocab_size:].argmax())])
+                it += 1
+                if tok == blank and dur == 0:
+                    dur = 1
+                if tok != blank:
+                    ids.append(tok)
+                    frames.append(step)
+                    durs.append(dur)
+                    last = tok
+                    h, c = h2, c2
+                if dur == 0:
+                    nsym += 1
+                    if nsym >= self._max_sym:
+                        dur = 1
+                        nsym = 0
+                else:
+                    nsym = 0
+                step += dur
+        return self._finish(ids, frames, durs, t_len)
+
+    speech._log_mel = types.MethodType(_log_mel, speech)
+    speech._decode_single = types.MethodType(_decode_single, speech)
+    speech.decode = dict(getattr(speech, "decode", {}) or {})
+    speech.decode["device"] = "cuda"
+    return speech
+
+
+def _load_phonon_model(model_name: str, device: str):
+    """Load official FermionResearch/Phonon-2 via fermion-research."""
+    try:
+        import fermion
+    except ImportError as exc:
+        raise RuntimeError(
+            "Phonon-2 requires fermion-research. Install with: "
+            "pip install fermion-research --no-deps "
+            "&& pip install soundfile scipy zstandard"
+        ) from exc
+    # Dense fp32 torch graph (movable to CUDA). Packed C kernels stay on CPU.
+    os.environ["FERMION_P2_CPU"] = "fp32"
+    os.environ["FERMION_P2_CPU_TDT"] = "off"
+    os.environ["FERMION_P2_CPU_ENC"] = "off"
+    try:
+        speech = fermion.load_speech("phonon-2")
+    except SystemExit as exc:
+        raise RuntimeError(str(exc) or f"failed to load {model_name}") from exc
+    if device == "cuda" and torch_cuda_available():
+        return _bind_phonon_cuda(speech)
+    return speech
 
 
 def _load_parakeet_model(model_name: str, device: str):
@@ -260,7 +406,7 @@ def _ensure_mono_16k_wav(audio_path: str) -> tuple[str, bool]:
             except OSError:
                 pass
             raise RuntimeError(
-                "ffmpeg is required on PATH for Parakeet STT "
+                "ffmpeg is required on PATH for Parakeet/Phonon STT "
                 "(or torchaudio must be able to load the audio)."
             ) from exc
     except subprocess.CalledProcessError as exc:
@@ -289,6 +435,22 @@ def _parakeet_text(output) -> str:
     return str(text).strip()
 
 
+def _phonon_result(output, wav_path: str) -> tuple[str, float]:
+    """fermion SpeechModel.transcribe returns (text, decode_s, audio_s)."""
+    text = ""
+    duration = _wav_duration_seconds(wav_path)
+    if isinstance(output, (tuple, list)) and output:
+        text = str(output[0] or "").strip()
+        if len(output) > 2 and output[2] is not None:
+            try:
+                duration = float(output[2])
+            except (TypeError, ValueError):
+                pass
+    elif output is not None:
+        text = str(getattr(output, "text", output) or "").strip()
+    return text, duration
+
+
 class Transcriber:
     def __init__(
         self,
@@ -315,8 +477,10 @@ class Transcriber:
                 self.device,
                 self.compute_type,
             )
-        else:
+        elif self.backend == "parakeet":
             self.model = _load_parakeet_model(self.model_name, self.device)
+        else:
+            self.model = _load_phonon_model(self.model_name, self.device)
         self.loaded = True
 
     @classmethod
@@ -394,6 +558,31 @@ class Transcriber:
             model=chosen,
         )
 
+    def _transcribe_phonon(
+        self,
+        audio_path: str,
+        chosen: str,
+    ) -> TranscriptionResult:
+        wav_path, is_temp = _ensure_mono_16k_wav(audio_path)
+        try:
+            with self._lock:
+                output = self.model.transcribe(wav_path)
+            text, duration = _phonon_result(output, wav_path)
+        finally:
+            if is_temp:
+                try:
+                    os.unlink(wav_path)
+                except OSError:
+                    pass
+
+        return TranscriptionResult(
+            text=text,
+            language="en",
+            duration=duration,
+            language_probability=1.0,
+            model=chosen,
+        )
+
     def transcribe_sync(
         self,
         audio_path: str,
@@ -402,8 +591,13 @@ class Transcriber:
     ) -> TranscriptionResult:
         chosen = normalize_stt_model(model, self.public_id)
         if self.backend == "whisper":
-            return self._transcribe_whisper(audio_path, language, chosen)
-        return self._transcribe_parakeet(audio_path, chosen)
+            result = self._transcribe_whisper(audio_path, language, chosen)
+        elif self.backend == "parakeet":
+            result = self._transcribe_parakeet(audio_path, chosen)
+        else:
+            result = self._transcribe_phonon(audio_path, chosen)
+        result.text = normalize_stt_text(result.text)
+        return result
 
     async def transcribe(
         self,

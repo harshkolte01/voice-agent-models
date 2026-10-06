@@ -1,5 +1,5 @@
 {
-  "url": "https://mls-airplane-percentage-sending.trycloudflare.com",
+  "url": "https://viewing-efforts-interview-gonna.trycloudflare.com",
   "health": {
     "status": "ok",
     "model_loaded": true,
@@ -15,7 +15,7 @@
       "models": {
         "models": [
           {
-            "id": "whisper-large-v3-turbo",
+            "id": "phonon-2",
             "type": "stt"
           },
           {
@@ -35,12 +35,12 @@
       "transcribe": {
         "ok": true,
         "status": 200,
-        "client_ms": 1262.1,
-        "processing_ms": 1083,
+        "client_ms": 944.5,
+        "processing_ms": 763,
         "duration": 15.0,
-        "rtf": 0.0722,
+        "rtf": 0.0509,
         "device": "cuda",
-        "model": "whisper-large-v3-turbo",
+        "model": "phonon-2",
         "language": "en",
         "keyword_hit_rate": 0.889,
         "keywords_found": [
@@ -53,7 +53,7 @@
           "hiring",
           "engineering"
         ],
-        "text_preview": "The quarterly planning meeting starts at 10 in the morning in Conference Room 4. Please bring the budget spreadsheet, the customer feedback notes, and the product roadmap. After lu"
+        "text_preview": "The quarterly planning meeting starts at10 in the morning in conference room4 . Please bring the budget spreadsheet, the customer feedback notes, and the product roadmap. After lun"
       }
     },
     {
@@ -62,7 +62,7 @@
       "models": {
         "models": [
           {
-            "id": "whisper-large-v3-turbo",
+            "id": "phonon-2",
             "type": "stt"
           },
           {
@@ -82,12 +82,12 @@
       "transcribe": {
         "ok": true,
         "status": 200,
-        "client_ms": 1457.3,
-        "processing_ms": 868,
+        "client_ms": 307.7,
+        "processing_ms": 153,
         "duration": 15.0,
-        "rtf": 0.0579,
+        "rtf": 0.0102,
         "device": "cuda",
-        "model": "whisper-large-v3-turbo",
+        "model": "phonon-2",
         "language": "en",
         "keyword_hit_rate": 0.889,
         "keywords_found": [
@@ -100,7 +100,7 @@
           "hiring",
           "engineering"
         ],
-        "text_preview": "The quarterly planning meeting starts at 10 in the morning in Conference Room 4. Please bring the budget spreadsheet, the customer feedback notes, and the product roadmap. After lu"
+        "text_preview": "The quarterly planning meeting starts at10 in the morning in conference room4 . Please bring the budget spreadsheet, the customer feedback notes, and the product roadmap. After lun"
       }
     }
   ]

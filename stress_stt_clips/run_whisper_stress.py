@@ -54,6 +54,8 @@ def transcribe(path: Path) -> dict:
             "status": e.code,
             "err": e.read().decode("utf-8", "replace")[:500],
         }
+    except Exception as e:
+        return {"ok": False, "status": 0, "err": f"{type(e).__name__}: {e}"}
     client_ms = (time.perf_counter() - t0) * 1000
     payload = json.loads(raw)
     text = payload.get("text") or ""
@@ -160,6 +162,7 @@ def main() -> None:
                     "rtf",
                     "keyword_hit_rate",
                 )
+                if k in r
             },
         )
 

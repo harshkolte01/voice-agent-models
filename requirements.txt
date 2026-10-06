@@ -5,6 +5,14 @@ pydantic-settings>=2.6.0
 python-dotenv>=1.0.0
 faster-whisper>=1.1.0
 nemo_toolkit[asr]>=2.7.3
+# Official Phonon-2 runtime (FermionResearch/Phonon-2). The package asks for
+# transformers>=5; this server stays on transformers 4.x for Kokoro/BGE, and
+# the Phonon-2 CPU engine falls back to a vendored Parakeet graph. Install:
+#   pip install fermion-research --no-deps
+#   pip install soundfile scipy zstandard
+soundfile>=0.12.1
+scipy>=1.11.0
+zstandard>=0.22.0
 # PyPI torch is CPU-only. After this file, install matching CUDA wheels:
 # pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 torch>=2.4.0
